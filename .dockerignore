@@ -1,0 +1,13 @@
+__pycache__
+*.pyc
+.git
+.env
+venv/
+data/*.db
+data/vector_db/
+memory/hierarchical/family/
+memory/hierarchical/william/
+quarantine/
+*.log
+.pytest_cache
+node_modules

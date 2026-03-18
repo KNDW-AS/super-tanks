@@ -1,0 +1,26 @@
+{
+  "_comment": "Super Tanks User Template — copy to users.json. Do NOT commit real user data.",
+  "example_admin": {
+    "name": "Your Name",
+    "level": 5,
+    "pin": "change_me",
+    "telegram_id": "",
+    "curfew_time": null,
+    "emergency_override": true,
+    "content_filter": "",
+    "permitted_entities": []
+  },
+  "example_child": {
+    "name": "Child Name",
+    "level": 1,
+    "pin": "change_me",
+    "telegram_id": "",
+    "curfew_time": "21:00",
+    "emergency_override": true,
+    "content_filter": "no violence, no political discussion, age-appropriate content",
+    "goodnight_message": "God natt! Aeris er her om du treng noko.",
+    "permitted_entities": ["light.bedroom", "media_player.bedroom"],
+    "filter_alerts": true,
+    "alert_content": false
+  }
+}

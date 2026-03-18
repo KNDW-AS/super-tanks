@@ -1,0 +1,40 @@
+# Super Tanks Family Configuration Template
+# Copy to family_config.yaml and fill in your values.
+# This file is NEVER sent anywhere — it stays on your machine.
+
+# Languages used in your household (for emergency keywords, UI, etc.)
+languages:
+  - en
+  - no
+  # Add: zh, hi, es, fr, ar, bn, pt, ru, ur
+
+# Emergency Override keywords (per language)
+# These trigger emergency bypass of curfew
+emergency_keywords:
+  en: [fire, smoke, help, sick, scared, hurt, pain, emergency, intruder]
+  no: [brann, røyk, hjelp, syk, redd, vondt, smerte, nødssituasjon, innbrudd]
+  common: ["110", "112", "113", "911", "999", "sos"]
+
+# Soul file descriptions (used during onboarding)
+# These become frozen after setup — only Level 5 users can update them.
+souls:
+  aeris:
+    description: |
+      Warm and patient. Speaks simply with younger users.
+      Knows the household routines. Family assistant.
+  zeph:
+    description: |
+      Precise and cautious. Silent guardian.
+      Methodical security specialist.
+
+# Notification preferences
+notifications:
+  method: telegram  # telegram, email, or cockpit_only
+  alerts:
+    filter_triggered: true
+    curfew_attempt: true
+    emergency_override: true
+    security_threat: true
+    gogate_approval: true
+    daily_summary: true
+    daily_summary_time: "07:00"

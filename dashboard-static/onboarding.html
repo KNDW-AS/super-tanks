@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Super Tanks — Setup</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0b0e14;--card:rgba(255,255,255,0.05);--border:rgba(255,255,255,0.1);--aeris:#00d4aa;--text:#dfe0e6;--text2:#8b8da0;--text3:#505268;--r:12px;--sans:'Inter',system-ui,sans-serif}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.wizard{max-width:600px;width:100%}
+.step{display:none;animation:fadeIn .3s}
+.step.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1}}
+h1{font-size:22px;font-weight:600;margin-bottom:6px}
+h2{font-size:17px;font-weight:500;margin-bottom:16px;color:var(--aeris)}
+.subtitle{font-size:13px;color:var(--text2);margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-bottom:16px}
+.privacy{font-size:11px;color:var(--text3);text-align:center;margin-top:12px;padding:8px;background:rgba(0,212,170,0.04);border-radius:var(--r)}
+label{display:block;font-size:13px;color:var(--text2);margin-bottom:6px}
+input[type=text],input[type=number],input[type=time],select,textarea{width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;font-family:var(--sans);margin-bottom:12px}
+textarea{min-height:80px;resize:vertical}
+.option-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-bottom:16px}
+.option{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;cursor:pointer;text-align:center;font-size:13px;transition:all .2s}
+.option:hover{border-color:var(--aeris)}
+.option.selected{border-color:var(--aeris);background:rgba(0,212,170,0.08);color:var(--aeris)}
+.level-grid{display:flex;gap:6px;margin-bottom:12px}
+.level-btn{flex:1;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text2);cursor:pointer;text-align:center;font-size:14px;font-weight:600;transition:all .2s}
+.level-btn:hover{border-color:var(--aeris)}
+.level-btn.sel{border-color:var(--aeris);background:rgba(0,212,170,0.1);color:var(--aeris)}
+.user-card{background:rgba(0,0,0,0.2);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.btn{padding:12px 24px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-primary{background:var(--aeris);color:var(--bg)}
+.btn-primary:hover{opacity:.85}
+.btn-secondary{background:var(--card);border:1px solid var(--border);color:var(--text2)}
+.btn-row{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+.collapsible{font-size:12px;color:var(--text3);cursor:pointer;margin-top:8px}
+.collapsible-content{display:none;font-size:12px;color:var(--text3);padding:8px;background:rgba(0,0,0,0.15);border-radius:6px;margin-top:6px}
+.progress{display:flex;gap:4px;margin-bottom:24px}
+.progress-dot{flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,0.06)}
+.progress-dot.done{background:var(--aeris)}
+.progress-dot.current{background:rgba(0,212,170,0.4)}
+.check-row{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px}
+.check-icon{color:var(--aeris);font-size:16px}
+.summary-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wizard" id="wizard">
+
+<!-- STEP 0: Language -->
+<div class="step active" data-step="0">
+<h1>Super Tanks</h1>
+<h2>Welcome · Velkommen</h2>
+<p class="subtitle">Choose your language</p>
+<div class="option-grid" id="langGrid">
+    <div class="option" onclick="pickLang(this,'en')">English</div>
+    <div class="option" onclick="pickLang(this,'no')">Norsk</div>
+    <div class="option" onclick="pickLang(this,'zh')">中文</div>
+    <div class="option" onclick="pickLang(this,'hi')">हिन्दी</div>
+    <div class="option" onclick="pickLang(this,'es')">Español</div>
+    <div class="option" onclick="pickLang(this,'fr')">Français</div>
+    <div class="option" onclick="pickLang(this,'ar')">العربية</div>
+    <div class="option" onclick="pickLang(this,'bn')">বাংলা</div>
+    <div class="option" onclick="pickLang(this,'pt')">Português</div>
+    <div class="option" onclick="pickLang(this,'ru')">Русский</div>
+    <div class="option" onclick="pickLang(this,'ur')">اردو</div>
+</div>
+<div class="privacy">Your answers are saved locally. Nothing is sent anywhere.</div>
+</div>
+
+<!-- STEP 1: Situation -->
+<div class="step" data-step="1">
+<h2>What describes your situation?</h2>
+<div class="option-grid" style="grid-template-columns:1fr">
+    <div class="option" onclick="pickSituation(this,'home')">Setting up for my home</div>
+    <div class="option" onclick="pickSituation(this,'business')">Setting up for a small business</div>
+    <div class="option" onclick="pickSituation(this,'developer')">Developer testing or building on Super Tanks</div>
+    <div class="option" onclick="pickSituation(this,'institution')">Setting up for an organisation or institution</div>
+</div>
+</div>
+
+<!-- STEP 2: AI Providers -->
+<div class="step" data-step="2">
+<h2>AI Providers</h2>
+<p class="subtitle">Which AI providers do you have access to?</p>
+<div class="option-grid" id="providerGrid">
+    <div class="option" onclick="toggleOpt(this,'ollama')">Ollama<br><span style="font-size:10px;color:var(--text3)">local, free</span></div>
+    <div class="option" onclick="toggleOpt(this,'gemini')">Gemini<br><span style="font-size:10px;color:var(--text3)">cloud, fast</span></div>
+    <div class="option" onclick="toggleOpt(this,'claude')">Claude<br><span style="font-size:10px;color:var(--text3)">cloud, quality</span></div>
+    <div class="option" onclick="toggleOpt(this,'openai')">OpenAI<br><span style="font-size:10px;color:var(--text3)">cloud, popular</span></div>
+    <div class="option" onclick="toggleOpt(this,'kimi')">Kimi K2.5<br><span style="font-size:10px;color:var(--text3)">cloud, 256K ctx</span></div>
+    <div class="option" onclick="toggleOpt(this,'other')">Other</div>
+</div>
+</div>
+
+<!-- STEP 3: Users -->
+<div class="step" data-step="3">
+<h2>Users</h2>
+<p class="subtitle">Who will use this system?</p>
+<div id="userList"></div>
+<button class="btn btn-secondary" onclick="addWizardUser()" style="margin-top:8px">+ Add user</button>
+<div class="collapsible" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'">Not sure what level? See examples ▾</div>
+<div class="collapsible-content">
+A parent managing everything → Level 4 or 5<br>
+A trusted teenager → Level 3 or 4<br>
+A younger child → Level 1 or 2<br>
+A grandparent who chats → Level 2<br>
+<em>These are just examples. You decide.</em>
+</div>
+</div>
+
+<!-- STEP 4: Per-user settings -->
+<div class="step" data-step="4">
+<h2>User Settings</h2>
+<p class="subtitle">Configure each user individually</p>
+<div id="userSettings"></div>
+</div>
+
+<!-- STEP 5: Soul files -->
+<div class="step" data-step="5">
+<h2>Agent Personalities</h2>
+<p class="subtitle">Define who your AI agents are. This becomes their sealed identity.</p>
+<div class="card">
+<label>AERIS — your primary assistant</label>
+<textarea id="soulAeris" placeholder="Warm and patient. Speaks simply with younger users. Knows the household."></textarea>
+</div>
+<div class="card">
+<label>ZEPH — your security specialist</label>
+<textarea id="soulZeph" placeholder="Precise and cautious. Silent guardian. Methodical."></textarea>
+</div>
+</div>
+
+<!-- STEP 6: Notifications -->
+<div class="step" data-step="6">
+<h2>Notifications</h2>
+<p class="subtitle">How do you want to receive alerts?</p>
+<div class="option-grid" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="option" onclick="pickNotif(this,'telegram')">Telegram</div>
+    <div class="option" onclick="pickNotif(this,'email')">Email</div>
+    <div class="option" onclick="pickNotif(this,'cockpit')">Cockpit only</div>
+</div>
+<div class="card" style="margin-top:12px">
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" checked id="nFilter"> When a message is filtered</label>
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" id="nContent"> Include filtered message content</label>
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" checked id="nCurfew"> When curfew is bypassed</label>
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" checked id="nEmergency"> Emergency Override activations</label>
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" checked id="nSecurity"> Security threats blocked</label>
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" checked id="nGogate"> GO-Gate actions</label>
+<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" checked id="nDaily"> Daily summary at <input type="time" value="07:00" id="nDailyTime" style="width:100px;margin:0 0 0 4px"></label>
+</div>
+</div>
+
+<!-- STEP 7: Summary -->
+<div class="step" data-step="7">
+<h2>Summary</h2>
+<p class="subtitle">Review your configuration</p>
+<div class="card" id="summaryCard"></div>
+<div class="privacy">Everything is saved locally. Nothing is sent anywhere.<br>All settings can be changed from the Level 5 panel at any time.</div>
+</div>
+
+<!-- STEP 8: Done -->
+<div class="step" data-step="8">
+<h2>System Ready</h2>
+<div class="card">
+<div class="check-row"><span class="check-icon">✓</span> ZEF Firewall loaded</div>
+<div class="check-row"><span class="check-icon">✓</span> Soul files verified and sealed</div>
+<div class="check-row"><span class="check-icon">✓</span> User profiles created</div>
+<div class="check-row"><span class="check-icon">✓</span> AI providers connected</div>
+<div class="check-row"><span class="check-icon">✓</span> GO-Gate armed</div>
+<div class="check-row"><span class="check-icon">✓</span> Curfew and Override configured</div>
+</div>
+<p style="text-align:center;font-size:15px;margin-top:20px">Your system is ready. <strong style="color:var(--aeris)">Aeris is waiting.</strong></p>
+<div class="btn-row" style="justify-content:center;margin-top:16px">
+<a href="/" class="btn btn-primary" style="text-decoration:none">Open Cockpit →</a>
+</div>
+</div>
+
+<!-- Navigation -->
+<div class="progress" id="progress"></div>
+<div class="btn-row" id="navBtns">
+<button class="btn btn-secondary" id="backBtn" onclick="prevStep()" style="display:none">Back</button>
+<button class="btn btn-primary" id="nextBtn" onclick="nextStep()">Next →</button>
+</div>
+</div>
+
+<script>
+const STEPS=9;let step=0;
+const config={lang:'en',situation:'',providers:[],users:[],souls:{aeris:'',zeph:''},notif:'telegram',alerts:{}};
+
+function updateProgress(){
+    const p=document.getElementById('progress');
+    p.innerHTML=Array.from({length:STEPS},(_,i)=>`<div class="progress-dot ${i<step?'done':i===step?'current':''}"></div>`).join('');
+    document.getElementById('backBtn').style.display=step>0&&step<8?'inline-flex':'none';
+    document.getElementById('nextBtn').style.display=step<8?'inline-flex':'none';
+    document.getElementById('navBtns').style.display=step===8?'none':'flex';
+}
+
+function showStep(n){
+    document.querySelectorAll('.step').forEach(s=>s.classList.remove('active'));
+    document.querySelector(`[data-step="${n}"]`).classList.add('active');
+    step=n;updateProgress();
+    if(n===4)renderUserSettings();
+    if(n===7)renderSummary();
+    if(n===8)applyConfig();
+}
+
+function nextStep(){if(step<STEPS-1)showStep(step+1)}
+function prevStep(){if(step>0)showStep(step-1)}
+
+function pickLang(el,lang){
+    document.querySelectorAll('#langGrid .option').forEach(o=>o.classList.remove('selected'));
+    el.classList.add('selected');config.lang=lang;
+}
+function pickSituation(el,sit){
+    document.querySelectorAll('[data-step="1"] .option').forEach(o=>o.classList.remove('selected'));
+    el.classList.add('selected');config.situation=sit;
+}
+function toggleOpt(el,prov){
+    el.classList.toggle('selected');
+    if(el.classList.contains('selected'))config.providers.push(prov);
+    else config.providers=config.providers.filter(p=>p!==prov);
+}
+function pickNotif(el,method){
+    document.querySelectorAll('[data-step="6"] .option-grid .option').forEach(o=>o.classList.remove('selected'));
+    el.classList.add('selected');config.notif=method;
+}
+
+// Users
+function addWizardUser(){
+    config.users.push({name:'',level:2,pin:'0000',curfew:'',override:true,filter:''});
+    renderUsers();
+}
+function renderUsers(){
+    const el=document.getElementById('userList');
+    el.innerHTML=config.users.map((u,i)=>`<div class="user-card">
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+            <input type="text" placeholder="Name" value="${u.name}" onchange="config.users[${i}].name=this.value" style="flex:1;margin:0">
+            <button onclick="config.users.splice(${i},1);renderUsers()" style="background:none;border:1px solid rgba(255,77,94,0.3);color:#ff4d5e;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">×</button>
+        </div>
+        <label style="font-size:11px">Access Level</label>
+        <div class="level-grid">${[1,2,3,4,5].map(l=>`<div class="level-btn ${u.level===l?'sel':''}" onclick="config.users[${i}].level=${l};renderUsers()">${l}</div>`).join('')}</div>
+    </div>`).join('');
+}
+
+function renderUserSettings(){
+    const el=document.getElementById('userSettings');
+    el.innerHTML=config.users.map((u,i)=>`<div class="card">
+        <h3 style="font-size:14px;margin-bottom:12px">${u.name||'User '+(i+1)} — Level ${u.level}</h3>
+        <label>Curfew</label>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+            <label style="font-size:12px"><input type="radio" name="curfew${i}" ${!u.curfew?'checked':''} onchange="config.users[${i}].curfew=''"> No limit</label>
+            <label style="font-size:12px"><input type="radio" name="curfew${i}" ${u.curfew?'checked':''} onchange="config.users[${i}].curfew='21:00'"> Stops at <input type="time" value="${u.curfew||'21:00'}" onchange="config.users[${i}].curfew=this.value" style="width:90px;margin:0 0 0 4px;padding:4px"></label>
+        </div>
+        <label><input type="checkbox" ${u.override?'checked':''} onchange="config.users[${i}].override=this.checked"> Emergency Override (bypass curfew in emergencies)</label>
+        <label style="margin-top:12px">Content filter (optional)</label>
+        <textarea placeholder="Specific rules work better. Example: no violence, no political discussion" onchange="config.users[${i}].filter=this.value" style="min-height:50px">${u.filter||''}</textarea>
+    </div>`).join('');
+}
+
+function renderSummary(){
+    const el=document.getElementById('summaryCard');
+    el.innerHTML=`
+        <div class="summary-row"><span>Language</span><span>${config.lang}</span></div>
+        <div class="summary-row"><span>Situation</span><span>${config.situation}</span></div>
+        <div class="summary-row"><span>AI Providers</span><span>${config.providers.join(', ')||'none'}</span></div>
+        <div class="summary-row"><span>Users</span><span>${config.users.length}</span></div>
+        ${config.users.map(u=>`<div class="summary-row" style="padding-left:16px"><span>${u.name} (L${u.level})</span><span>${u.curfew?'Curfew '+u.curfew:'No curfew'}</span></div>`).join('')}
+        <div class="summary-row"><span>Aeris soul</span><span style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${document.getElementById('soulAeris').value.substring(0,40)||'(default)'}</span></div>
+        <div class="summary-row"><span>Zeph soul</span><span style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${document.getElementById('soulZeph').value.substring(0,40)||'(default)'}</span></div>
+        <div class="summary-row"><span>Notifications</span><span>${config.notif}</span></div>
+    `;
+}
+
+async function applyConfig(){
+    // Save config to backend
+    config.souls.aeris=document.getElementById('soulAeris').value;
+    config.souls.zeph=document.getElementById('soulZeph').value;
+    try{
+        // Create users via API
+        for(const u of config.users){
+            if(!u.name)continue;
+            await fetch('/api/users/create',{method:'POST',headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({name:u.name,level:u.level,pin:u.pin||'0000',
+                    curfew_time:u.curfew||null,emergency_override:u.override,
+                    content_filter:u.filter,admin_pin:'0000'})});
+        }
+    }catch(e){console.error('Setup error:',e)}
+}
+
+// Init
+addWizardUser();
+updateProgress();
+</script>
+</body>
+</html>

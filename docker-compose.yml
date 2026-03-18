@@ -1,0 +1,67 @@
+version: "3.8"
+
+services:
+  super-tanks:
+    build: .
+    image: kndw/super-tanks:latest
+    container_name: super-tanks
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data
+      - ./memory:/app/memory
+      - ./config:/app/config
+      - ./.env:/app/.env:ro
+    depends_on:
+      ollama:
+        condition: service_started
+      chromadb:
+        condition: service_started
+    environment:
+      - OLLAMA_LOCAL_HOST=ollama
+      - OLLAMA_LOCAL_PORT=11434
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+    restart: unless-stopped
+    networks:
+      - super-tanks-net
+
+  ollama:
+    image: ollama/ollama
+    container_name: super-tanks-ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    networks:
+      - super-tanks-net
+    # Pull default models on first start
+    entrypoint: >
+      sh -c "ollama serve &
+             sleep 5 &&
+             ollama pull llama3.2:3b &&
+             ollama pull nomic-embed-text &&
+             wait"
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: super-tanks-chromadb
+    volumes:
+      - chroma-data:/chroma/chroma
+    ports:
+      - "8000:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+    networks:
+      - super-tanks-net
+
+volumes:
+  ollama-models:
+  chroma-data:
+
+networks:
+  super-tanks-net:
+    driver: bridge
