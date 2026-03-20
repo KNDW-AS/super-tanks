@@ -1,8 +1,8 @@
-# Super Tanks v3.1
+# Super Tanks v3.2
 
 **The governance layer that makes AI autonomy possible.**
 
-Not a detection tool that reacts after something goes wrong. 10 simultaneous security layers that prevent it from happening in the first place.
+Not a detection tool that reacts after something goes wrong. 12 simultaneous security layers that prevent it from happening in the first place.
 
 ```bash
 curl -sSL https://aeris.no/install.sh | bash
@@ -18,11 +18,11 @@ Super Tanks is a security and governance framework for AI home assistants. It co
 - **Smart home ready** — Home Assistant integration
 - **Open source** — Apache 2.0
 
-## The 10 Security Layers
+## The 12 Security Layers
 
 | # | Layer | What it does |
 |---|-------|-------------|
-| 1 | **ZEF Firewall** | Blocks prompt injection attacks (30+ patterns, EN/NO) |
+| 1 | **ZEF Firewall** | Blocks prompt injection attacks (30+ patterns, EN/NO) + MCP tool-call filtering |
 | 2 | **Soul Files** | Agent identities are sealed and tamper-proof (SHA256) |
 | 3 | **DIQ Contracts** | Frozen interface contracts — agents can't modify their own tools |
 | 4 | **Allowlists** | Per-agent tool permissions — explicit allow, default deny |
@@ -32,6 +32,8 @@ Super Tanks is a security and governance framework for AI home assistants. It co
 | 8 | **Tripwires** | Honeypot files that trigger instant lockdown |
 | 9 | **Trust Score** | Behavioral reputation — good behavior earns autonomy |
 | 10 | **Token Budget** | Per-agent daily spending limits |
+| 11 | **Provider Trust Tier** | Data filtering per LLM provider — local/trusted/mixed/open |
+| 12 | **Soul Split** | Tier-based prompt separation — identity vs capabilities |
 
 ## Install
 
