@@ -35,6 +35,17 @@ def seed_admin(user_db):
 
 
 @pytest.fixture
+def budget_db(tmp_path, monkeypatch):
+    """Per-test isolated token_budget.db."""
+    from core.security import token_budget
+
+    db_path = tmp_path / "token_budget.db"
+    monkeypatch.setattr(token_budget, "BUDGET_DB", db_path)
+    token_budget._init_db()
+    return token_budget
+
+
+@pytest.fixture
 def trust_db(tmp_path, monkeypatch):
     """Provide a fresh, isolated trust_score.db for each test, with the
     Telegram notification side-effect stubbed out."""
