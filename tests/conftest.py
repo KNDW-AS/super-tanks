@@ -35,6 +35,16 @@ def seed_admin(user_db):
 
 
 @pytest.fixture
+def night_queue_db(tmp_path, monkeypatch):
+    """Per-test isolated night_queue.db."""
+    from core.security import night_queue
+    db_path = tmp_path / "night_queue.db"
+    monkeypatch.setattr(night_queue, "QUEUE_DB", db_path)
+    night_queue._init_db()
+    return night_queue
+
+
+@pytest.fixture
 def budget_db(tmp_path, monkeypatch):
     """Per-test isolated token_budget.db."""
     from core.security import token_budget
