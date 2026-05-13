@@ -107,15 +107,35 @@ class TestRecordEvent:
 # ── Manual adjust quirks ───────────────────────────────────────────────────
 
 class TestManualAdjustViaRecordEvent:
-    def test_manual_adjust_through_record_event_is_zero_delta(self, trust_db):
-        # FINDING: record_event hardcodes change=0 for "manual_adjust", so
-        # the docstring claim ("caller sets the delta via details") is not
-        # implemented. Documented as a known-behaviour test — callers
-        # wanting a real adjustment must use set_score() instead.
+    def test_positive_numeric_details_applies_delta(self, trust_db):
         before = trust_db.get_score("aeris")["score"]
         result = trust_db.record_event("aeris", "manual_adjust", details="+10")
+        assert result["change"] == 10.0
+        assert result["score_after"] == before + 10.0
+
+    def test_negative_numeric_details_applies_delta(self, trust_db):
+        before = trust_db.get_score("aeris")["score"]
+        result = trust_db.record_event("aeris", "manual_adjust", details="-7.5")
+        assert result["change"] == -7.5
+        assert result["score_after"] == before - 7.5
+
+    def test_empty_details_means_zero_delta(self, trust_db):
+        before = trust_db.get_score("aeris")["score"]
+        result = trust_db.record_event("aeris", "manual_adjust", details="")
         assert result["change"] == 0.0
         assert result["score_after"] == before
+
+    def test_non_numeric_details_falls_back_to_zero(self, trust_db):
+        before = trust_db.get_score("aeris")["score"]
+        result = trust_db.record_event("aeris", "manual_adjust",
+                                       details="not a number")
+        assert result["change"] == 0.0
+        assert result["score_after"] == before
+
+    def test_manual_adjust_respects_clamp(self, trust_db):
+        trust_db.set_score("aeris", 95.0, reason="setup")
+        result = trust_db.record_event("aeris", "manual_adjust", details="+50")
+        assert result["score_after"] == 100.0
 
 
 # ── set_score: direct override ─────────────────────────────────────────────
