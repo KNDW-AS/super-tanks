@@ -32,3 +32,17 @@ def seed_admin(user_db):
     """Create a single Level 5 admin so tests start from a usable state."""
     user_db.create_user(name="Admin", pin="0000", level=5, created_by="system")
     return user_db
+
+
+@pytest.fixture
+def trust_db(tmp_path, monkeypatch):
+    """Provide a fresh, isolated trust_score.db for each test, with the
+    Telegram notification side-effect stubbed out."""
+    from core.security import trust_score
+
+    db_path = tmp_path / "trust_score.db"
+    monkeypatch.setattr(trust_score, "TRUST_DB", db_path)
+    monkeypatch.setattr(trust_score, "_notify_level_change",
+                        lambda *a, **kw: None)
+    trust_score._init_db()
+    return trust_score
