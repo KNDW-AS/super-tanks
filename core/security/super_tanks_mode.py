@@ -105,9 +105,16 @@ NIGHT_MODE_CONFIG = {
 _MODEL_TIER_FINGERPRINT: Optional[str] = None
 _LAST_BASELINED_TIER: Optional[str] = None
 
+ZEF_BASELINE_FILE = Path(__file__).resolve().parent.parent.parent / "config" / "zef_baseline.json"
+
 
 def set_current_model_tier(fingerprint: str) -> None:
-    """Production hook: call when the upstream LLM provider changes."""
+    """Production hook: call when the upstream LLM provider changes.
+
+    The bootstrap reads ST_UPSTREAM_MODEL and feeds it here. A live
+    LLM client should also call this on model swap so AUTONOMOUS
+    cannot survive an upgrade without re-baselining.
+    """
     global _MODEL_TIER_FINGERPRINT
     with _state_lock:
         _MODEL_TIER_FINGERPRINT = fingerprint
@@ -115,10 +122,45 @@ def set_current_model_tier(fingerprint: str) -> None:
 
 def mark_zef_baselined(fingerprint: str) -> None:
     """Call after running the ZEF redteam corpus against a new tier
-    and confirming the FPR/block-rate floor still holds."""
+    and confirming the FPR/block-rate floor still holds.
+
+    Persists to ZEF_BASELINE_FILE so the baseline survives restarts —
+    otherwise every reboot would block AUTONOMOUS until the operator
+    re-ran the corpus, which is operationally hostile.
+    """
     global _LAST_BASELINED_TIER
     with _state_lock:
         _LAST_BASELINED_TIER = fingerprint
+    _persist_zef_baseline(fingerprint)
+
+
+def _persist_zef_baseline(fingerprint: str) -> None:
+    payload = {
+        "fingerprint": fingerprint,
+        "baselined_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        ZEF_BASELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ZEF_BASELINE_FILE.write_text(json.dumps(payload, indent=2))
+    except Exception as e:
+        logger.error("Failed to persist ZEF baseline: %s", e)
+
+
+def load_zef_baseline() -> Optional[str]:
+    """Read persisted baseline (called from bootstrap)."""
+    global _LAST_BASELINED_TIER
+    if not ZEF_BASELINE_FILE.exists():
+        return None
+    try:
+        data = json.loads(ZEF_BASELINE_FILE.read_text())
+        fp = data.get("fingerprint")
+        if fp:
+            with _state_lock:
+                _LAST_BASELINED_TIER = fp
+        return fp
+    except Exception as e:
+        logger.error("Failed to load ZEF baseline: %s", e)
+        return None
 
 
 def needs_rebaseline() -> bool:

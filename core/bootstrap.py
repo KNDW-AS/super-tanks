@@ -93,6 +93,37 @@ def _step_ensure_tripwires(result: BootResult) -> None:
     logger.info("[BOOT] Tripwires verified (%d deployed)", created)
 
 
+def _step_load_upstream_tier(result: BootResult) -> None:
+    """Arm the tier-rebaseline gate.
+
+    Reads the configured upstream model fingerprint from the
+    `ST_UPSTREAM_MODEL` env var and tells super_tanks_mode which tier
+    is live. Then loads the persisted ZEF baseline (if any) so the
+    last `mark_zef_baselined()` survives restarts.
+
+    A missing env var is intentional and logged — it leaves the gate
+    dormant (no calls to `set_current_model_tier` → `needs_rebaseline()`
+    returns False → AUTONOMOUS unaffected). Pre-Mythos / dev workflows
+    can run without setting it.
+    """
+    import os
+    from core.security.super_tanks_mode import (
+        set_current_model_tier, load_zef_baseline,
+    )
+    tier = os.environ.get("ST_UPSTREAM_MODEL")
+    if tier:
+        set_current_model_tier(tier)
+        logger.info("[BOOT] Upstream model tier: %s", tier)
+    else:
+        logger.info(
+            "[BOOT] ST_UPSTREAM_MODEL not set — tier-rebaseline gate dormant"
+        )
+    baselined = load_zef_baseline()
+    if baselined:
+        logger.info("[BOOT] ZEF baseline loaded: %s", baselined)
+    result.steps_completed.append("load_upstream_tier")
+
+
 def _step_register_tools(result: BootResult) -> None:
     """Register DIQ tools/skills/adapters. The registry needs this run
     before any tool dispatch can succeed.
@@ -112,12 +143,13 @@ def _step_register_tools(result: BootResult) -> None:
 
 
 _BOOT_SEQUENCE = [
-    _step_verify_diq,       # hard fail
-    _step_check_souls,      # soft fail (safe mode)
+    _step_verify_diq,           # hard fail
+    _step_check_souls,          # soft fail (safe mode)
     _step_load_mode,
     _step_ensure_admin,
     _step_ensure_tripwires,
-    _step_register_tools,   # soft fail (tools/ may be absent)
+    _step_load_upstream_tier,   # arms the tier-rebaseline gate
+    _step_register_tools,       # soft fail (tools/ may be absent)
 ]
 
 

@@ -32,6 +32,10 @@ def stm(tmp_path, monkeypatch):
 
     state_file = tmp_path / "super_tanks_state.json"
     monkeypatch.setattr(m, "STATE_FILE", state_file)
+    # Redirect ZEF baseline persistence so mark_zef_baselined doesn't
+    # write into the real config dir during tests.
+    baseline_file = tmp_path / "zef_baseline.json"
+    monkeypatch.setattr(m, "ZEF_BASELINE_FILE", baseline_file)
 
     # Capture Telegram posts.
     posts = []
@@ -417,3 +421,30 @@ class TestTierRebaseline:
         # Now AUTONOMOUS is allowed.
         stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
         assert stm.m.get_mode() == stm.m.TankMode.AUTONOMOUS
+
+    def test_mark_zef_baselined_persists_to_disk(self, stm):
+        stm.m.mark_zef_baselined("claude-mythos-2026-04")
+        assert stm.m.ZEF_BASELINE_FILE.exists()
+        data = json.loads(stm.m.ZEF_BASELINE_FILE.read_text())
+        assert data["fingerprint"] == "claude-mythos-2026-04"
+        assert "baselined_at" in data
+
+    def test_load_zef_baseline_round_trip(self, stm, monkeypatch):
+        # Persist via the API.
+        stm.m.mark_zef_baselined("claude-mythos-2026-04")
+        # Wipe in-memory state, simulate restart.
+        monkeypatch.setattr(stm.m, "_LAST_BASELINED_TIER", None)
+        # Load picks the fingerprint back up.
+        loaded = stm.m.load_zef_baseline()
+        assert loaded == "claude-mythos-2026-04"
+        # And the in-memory global is restored.
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        assert stm.m.needs_rebaseline() is False
+
+    def test_load_zef_baseline_missing_file_is_none(self, stm):
+        assert stm.m.load_zef_baseline() is None
+
+    def test_load_zef_baseline_corrupt_file_does_not_crash(self, stm):
+        stm.m.ZEF_BASELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        stm.m.ZEF_BASELINE_FILE.write_text("{ not json")
+        assert stm.m.load_zef_baseline() is None
