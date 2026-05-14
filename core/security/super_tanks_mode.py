@@ -143,15 +143,24 @@ def set_mode(new_mode: TankMode, timeout_hours: int = 8) -> dict:
 
     _persist_state(old_mode, new_mode)
 
-    # Audit
+    # Audit. Previously this imported core.audit_store, a module that
+    # doesn't exist in this codebase, then swallowed the ImportError —
+    # so every mode change (including tripwire-forced LOCKDOWN) ran
+    # un-audited. Use the real memory audit log instead.
     try:
-        from core.audit_store import get_audit_store
-        get_audit_store().log_audit(
-            agent="boss", action="super_tanks_mode_change", outcome="success",
-            details=f"{old_mode.value} -> {new_mode.value} (timeout={timeout_hours}h)",
+        from core.memory.audit_log import log_access
+        log_access(
+            agent_id="boss",
+            operation="MODE_CHANGE",
+            path=f"{old_mode.value}->{new_mode.value}",
+            detail_level=-1,
+            mode=new_mode.value,
+            accessible=True,
+            trajectory=f"timeout={timeout_hours}h",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("[MODE] Audit write failed for %s->%s: %s",
+                     old_mode.value, new_mode.value, exc)
 
     _notify_mode_change(old_mode, new_mode)
     return get_mode_config()

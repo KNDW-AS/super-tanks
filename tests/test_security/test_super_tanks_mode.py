@@ -39,12 +39,15 @@ def stm(tmp_path, monkeypatch):
     monkeypatch.setenv("AERIS_GOGATE_TELEGRAM_TOKEN", "fake")
     monkeypatch.setenv("AERIS_ADMIN_CHAT_ID", "1")
 
-    # Stub audit_store (lazy-imported in set_mode).
+    # Stub memory audit log (lazy-imported in set_mode). Previously
+    # set_mode imported core.audit_store, a module that doesn't exist —
+    # the import error was silently swallowed and mode changes ran
+    # un-audited. The real implementation now routes through the
+    # existing memory audit log.
     audit_calls = []
-    fake_audit = types.ModuleType("core.audit_store")
-    fake_audit.get_audit_store = lambda: types.SimpleNamespace(
-        log_audit=lambda **kw: audit_calls.append(kw))
-    monkeypatch.setitem(sys.modules, "core.audit_store", fake_audit)
+    fake_audit = types.ModuleType("core.memory.audit_log")
+    fake_audit.log_access = lambda **kw: audit_calls.append(kw)
+    monkeypatch.setitem(sys.modules, "core.memory.audit_log", fake_audit)
 
     # Stub night_queue.
     queue_calls = []
@@ -112,7 +115,10 @@ class TestSetMode:
     def test_audit_log_called(self, stm):
         stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
         assert len(stm.audit_calls) == 1
-        assert stm.audit_calls[0]["action"] == "super_tanks_mode_change"
+        entry = stm.audit_calls[0]
+        assert entry["operation"] == "MODE_CHANGE"
+        assert "lockdown->autonomous" in entry["path"]
+        assert entry["mode"] == "autonomous"
 
     def test_telegram_notification_sent(self, stm):
         stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)

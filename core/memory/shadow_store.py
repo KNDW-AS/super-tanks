@@ -296,16 +296,25 @@ def process_auto_approvals() -> int:
 
 
 def expire_old_proposals() -> int:
-    """Expire proposals older than their TTL."""
+    """Expire proposals older than their TTL.
+
+    SQLite's datetime() function returns 'YYYY-MM-DD HH:MM:SS' (space
+    separator, no microseconds, no offset). Passing
+    datetime.now(timezone.utc).isoformat() ('2024-01-15T12:30:45.12+00:00')
+    as the right-hand side meant lexicographic comparison crossed the
+    space-vs-T-vs-offset boundary inconsistently — at some date
+    boundaries nothing expired. Format the now-string to match
+    SQLite's so the comparison is plain string order.
+    """
     conn = _get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        now = datetime.now(timezone.utc)
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute("""
             UPDATE shadow_proposals SET status='expired'
             WHERE status='pending'
             AND datetime(created_at, '+' || ttl_days || ' days') < ?
-        """, (now.isoformat(),))
+        """, (now_str,))
         affected = conn.execute("SELECT changes()").fetchone()[0]
         conn.commit()
         if affected:

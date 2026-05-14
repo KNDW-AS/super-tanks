@@ -1,10 +1,13 @@
 """
 Tests for core/memory/audit_log.py.
 
-The module caches a singleton connection in module-level `_conn`. The
-fixture resets that singleton, redirects DB_PATH to a tmp file, and
-runs each test against a clean append-only log.
+The module opens a fresh sqlite3 connection per write to avoid the
+cross-thread cursor interleaving the previous singleton suffered. The
+fixture redirects DB_PATH to a tmp file and resets the one-shot
+init flag so each test starts with a clean schema.
 """
+
+import threading
 
 import pytest
 
@@ -13,9 +16,8 @@ import pytest
 def audit(tmp_path, monkeypatch):
     from core.memory import audit_log
 
-    # Reset singleton and redirect DB.
-    monkeypatch.setattr(audit_log, "_conn", None)
     monkeypatch.setattr(audit_log, "DB_PATH", tmp_path / "memory_audit.db")
+    monkeypatch.setattr(audit_log, "_initialised", False)
     return audit_log
 
 
@@ -79,17 +81,48 @@ class TestLogAccess:
         assert audit.get_recent_access() == []
 
 
-# ── Singleton connection ───────────────────────────────────────────────────
+# ── Connection lifecycle ──────────────────────────────────────────────────
 
-class TestSingletonConnection:
-    def test_get_connection_caches(self, audit):
-        c1 = audit._get_connection()
-        c2 = audit._get_connection()
-        assert c1 is c2
+class TestConnectionLifecycle:
+    def test_each_call_opens_fresh_connection(self, audit):
+        # New behaviour: per-call connections, not a shared singleton.
+        c1 = audit._open()
+        c2 = audit._open()
+        try:
+            assert c1 is not c2
+        finally:
+            c1.close()
+            c2.close()
 
-    def test_table_created_on_first_call(self, audit):
-        conn = audit._get_connection()
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_access_log'"
-        ).fetchone()
-        assert row is not None
+    def test_table_created_on_first_use(self, audit):
+        conn = audit._open()
+        try:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='memory_access_log'"
+            ).fetchone()
+            assert row is not None
+        finally:
+            conn.close()
+
+    def test_concurrent_writes_do_not_corrupt_each_other(self, audit):
+        # 30 threads each log one row. With the old shared-cursor
+        # singleton these would interleave; now WAL serializes them at
+        # the file level and every row lands.
+        N = 30
+
+        def writer(i):
+            audit.log_access(agent_id="aeris", operation="WRITE",
+                             path=f"/p/{i}", trajectory=str(i))
+
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        rows = audit.get_recent_access(limit=100)
+        assert len(rows) == N
+        # Every trajectory id from 0..N-1 is present.
+        observed = {int(r["trajectory"]) for r in rows}
+        assert observed == set(range(N))

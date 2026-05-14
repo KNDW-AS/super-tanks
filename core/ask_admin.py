@@ -135,11 +135,17 @@ class ApprovalStore:
         reason: str,
         args: Dict[str, Any],
         ttl_seconds: int = 300
-    ) -> ApprovalRequest:
-        """Create new approval request"""
-        # Hash arguments (privacy-preserving)
+    ) -> Optional[ApprovalRequest]:
+        """Create new approval request. Returns None if persistence fails.
+
+        The args_hash is the full 256-bit SHA-256 hex. The previous
+        truncation to 64 bits (16 hex chars) made deliberate collisions
+        cheap (≈ 2^32 hashes ≈ minutes on commodity hardware) — an
+        attacker could craft args that collide with a previously-approved
+        request and ride the 1h replay window.
+        """
         args_str = json.dumps(args, sort_keys=True)
-        args_hash = hashlib.sha256(args_str.encode()).hexdigest()[:16]
+        args_hash = hashlib.sha256(args_str.encode()).hexdigest()
         args_len = len(args_str)
 
         # Store raw params for display in approval notification.
@@ -164,12 +170,24 @@ class ApprovalStore:
             raw_params=raw_params,
         )
 
-        self._save_request(request)
+        if not self._save_request(request):
+            logger.error(
+                f"[ASK_ADMIN] Could not persist request {request.request_id} "
+                f"for {tool_name} — caller must deny the operation"
+            )
+            return None
         logger.info(f"[ASK_ADMIN] Created request {request.request_id} for {tool_name}")
         return request
     
-    def _save_request(self, request: ApprovalRequest):
-        """Save request to database. ZEF v1: BEGIN IMMEDIATE prevents double-spend."""
+    def _save_request(self, request: ApprovalRequest) -> bool:
+        """Persist the request. Returns True on success, False on SQLITE_BUSY.
+
+        Previously this swallowed SQLITE_BUSY silently — callers
+        constructed an ApprovalRequest object that never landed in the
+        DB, dedup broke, and the daemon polling the DB never saw the
+        request. Now the failure is surfaced so create_request can
+        propagate it as a DENY to the caller.
+        """
         import sqlite3
 
         conn = self._get_conn()
@@ -189,13 +207,14 @@ class ApprovalStore:
                 request.raw_params or '{}',
             ))
             conn.commit()
+            return True
         except sqlite3.OperationalError as e:
             logger.error(f"[ZEF v1] _save_request SQLITE_BUSY for {request.request_id}: {e} — DENY")
             try:
                 conn.rollback()
             except Exception:
                 pass
-            # Do NOT re-raise — log and continue per Super Tanks philosophy
+            return False
         finally:
             conn.close()
     
@@ -224,7 +243,7 @@ class ApprovalStore:
         
         # Hash args same way as create
         args_str = json.dumps(args, sort_keys=True)
-        args_hash = hashlib.sha256(args_str.encode()).hexdigest()[:16]
+        args_hash = hashlib.sha256(args_str.encode()).hexdigest()
         
         with self._get_conn() as conn:
             row = conn.execute("""
@@ -255,7 +274,7 @@ class ApprovalStore:
         
         # Hash args same way as create
         args_str = json.dumps(args, sort_keys=True)
-        args_hash = hashlib.sha256(args_str.encode()).hexdigest()[:16]
+        args_hash = hashlib.sha256(args_str.encode()).hexdigest()
         
         cutoff_time = time.time() - max_age_seconds
         
@@ -454,7 +473,10 @@ def check_tool_permission(
         args=args,
         ttl_seconds=ttl
     )
-    
+    if request is None:
+        # Persistence failed — fail closed.
+        return False, None, "APPROVAL_STORE_UNAVAILABLE"
+
     return False, request.request_id, "PAUSED_FOR_APPROVAL"
 
 
