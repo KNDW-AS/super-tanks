@@ -15,17 +15,39 @@ All checks are READ-ONLY — never modify system state.
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from zoneinfo import ZoneInfo
+    _HAS_ZONEINFO = True
+except ImportError:
+    _HAS_ZONEINFO = False
+
 logger = logging.getLogger("zeph.proactive_monitor")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = REPO_ROOT / "data"
 SCHEDULE_FILE = DATA_DIR / "monitor_schedule.json"
+
+# Schedules are interpreted in this timezone, not UTC. "daily_health"
+# at hour=22 means 22:00 in the configured tz — typically the family's
+# local time. Default UTC keeps the old behaviour for callers that
+# haven't migrated. Override via SUPER_TANKS_TZ env var (any IANA tz
+# name like "Europe/Oslo").
+def _schedule_tz():
+    tz_name = os.environ.get("SUPER_TANKS_TZ", "UTC")
+    if tz_name == "UTC" or not _HAS_ZONEINFO:
+        return timezone.utc
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        logger.warning("[MONITOR] Unknown SUPER_TANKS_TZ %r — falling back to UTC", tz_name)
+        return timezone.utc
 
 # ── Schedule definitions ─────────────────────────────────────────────────────
 
@@ -111,8 +133,13 @@ def check_schedule() -> List[str]:
     A schedule is due when:
       - The current time matches the schedule's hour (and optionally weekday/monthday).
       - The task has not been run since the last matching window.
+
+    Time is read in the configured schedule timezone (see _schedule_tz).
+    Previously this used UTC, which made "hour=22" fire at 23:00 local
+    in winter Europe/Oslo and 00:00 in summer — sliding across the
+    intended wall-clock semantic at every DST transition.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_schedule_tz())
     state = _load_schedule_state()
     due: List[str] = []
 
