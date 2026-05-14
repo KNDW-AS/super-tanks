@@ -29,7 +29,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from core.diq.diq_registry import get_tool
-from core.diq.diq_tools import ToolRequest, ToolResponse
+from core.diq.diq_tools import ToolRequest, ToolResponse, _gateway_active
 
 logger = logging.getLogger("gateway")
 
@@ -125,4 +125,11 @@ async def dispatch_tool(
             )
 
     logger.debug("[gateway] dispatch: agent=%s tool=%s", agent_id, tool_name)
-    return await tool.execute(request)
+    # Mark this dispatch as gateway-originated so DIQTool.execute()
+    # accepts it. The ContextVar is per-task, so concurrent dispatches
+    # don't pollute each other.
+    token = _gateway_active.set(True)
+    try:
+        return await tool.execute(request)
+    finally:
+        _gateway_active.reset(token)

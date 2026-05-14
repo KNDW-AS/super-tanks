@@ -28,8 +28,61 @@ class _FakeTool(DIQTool):
     def required_role(self):
         return self._req
 
-    async def execute(self, request):
+    async def _execute_impl(self, request):
         return ToolResponse(success=True, result="ok")
+
+
+# ── Gateway chokepoint enforcement ─────────────────────────────────────────
+
+class TestGatewayChokepoint:
+    def test_direct_execute_outside_gateway_refused(self):
+        # Calling .execute() without gateway context returns a refusal,
+        # not the actual tool result. The architectural review flagged
+        # that any caller could bypass role + allowlist + audit by
+        # holding a tool instance and calling execute() directly.
+        import asyncio
+        tool = _FakeTool()
+        req = ToolRequest(tool_name="fake", agent_id="aeris",
+                          agent_role="READ", parameters={})
+        resp = asyncio.run(tool.execute(req))
+        assert resp.success is False
+        assert "bypass" in resp.error.lower()
+
+    def test_execute_inside_gateway_context_succeeds(self):
+        # When the gateway sets the ContextVar, execute() proceeds.
+        import asyncio
+        from core.diq.diq_tools import _gateway_active
+
+        async def _under_gateway():
+            token = _gateway_active.set(True)
+            try:
+                tool = _FakeTool()
+                req = ToolRequest(tool_name="fake", agent_id="aeris",
+                                  agent_role="READ", parameters={})
+                return await tool.execute(req)
+            finally:
+                _gateway_active.reset(token)
+
+        resp = asyncio.run(_under_gateway())
+        assert resp.success is True
+        assert resp.result == "ok"
+
+    def test_subclass_overriding_execute_is_rejected(self):
+        # __init_subclass__ refuses subclasses that try to override
+        # the chokepoint. Hard fail at class definition, not silent
+        # bypass at call time.
+        with pytest.raises(TypeError, match="overrides execute"):
+            class _Bad(DIQTool):
+                def name(self): return "bad"
+                def description(self): return ""
+                def parameters_schema(self): return {}
+                def required_role(self): return "READ"
+
+                async def execute(self, request):  # banned
+                    return ToolResponse(success=True, result="bypass")
+
+                async def _execute_impl(self, request):
+                    return ToolResponse(success=True, result="ok")
 
 
 # ── Dataclass immutability ─────────────────────────────────────────────────

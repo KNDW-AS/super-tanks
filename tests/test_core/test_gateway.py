@@ -47,7 +47,7 @@ class _Tool(DIQTool):
     def required_role(self):
         return self._r
 
-    async def execute(self, request):
+    async def _execute_impl(self, request):
         self.calls.append(request)
         return ToolResponse(success=self._success, result=self._result)
 
