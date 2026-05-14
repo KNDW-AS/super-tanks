@@ -22,6 +22,7 @@ def hs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hybrid_search, "EMBEDDING_DB", tmp_path / "embed.db")
     monkeypatch.setattr(hierarchical_store, "STORE_ROOT", tmp_path / "hm")
+    monkeypatch.setattr(hybrid_search, "_initialised", False)
     hybrid_search._init_db()
 
     # Stub the embedding network call by default; tests can override.

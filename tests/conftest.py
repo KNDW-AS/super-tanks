@@ -23,6 +23,7 @@ def user_db(tmp_path, monkeypatch):
 
     db_path = tmp_path / "users.db"
     monkeypatch.setattr(user_manager, "USER_DB", db_path)
+    monkeypatch.setattr(user_manager, "_initialised", False)
     user_manager._init_db()
     return user_manager
 
@@ -40,6 +41,7 @@ def night_queue_db(tmp_path, monkeypatch):
     from core.security import night_queue
     db_path = tmp_path / "night_queue.db"
     monkeypatch.setattr(night_queue, "QUEUE_DB", db_path)
+    monkeypatch.setattr(night_queue, "_initialised", False)
     night_queue._init_db()
     return night_queue
 
@@ -51,6 +53,7 @@ def budget_db(tmp_path, monkeypatch):
 
     db_path = tmp_path / "token_budget.db"
     monkeypatch.setattr(token_budget, "BUDGET_DB", db_path)
+    monkeypatch.setattr(token_budget, "_initialised", False)
     token_budget._init_db()
     return token_budget
 
@@ -63,6 +66,8 @@ def trust_db(tmp_path, monkeypatch):
 
     db_path = tmp_path / "trust_score.db"
     monkeypatch.setattr(trust_score, "TRUST_DB", db_path)
+    # Force the lazy schema bootstrap to run again against the new path.
+    monkeypatch.setattr(trust_score, "_initialised", False)
     monkeypatch.setattr(trust_score, "_notify_level_change",
                         lambda *a, **kw: None)
     trust_score._init_db()

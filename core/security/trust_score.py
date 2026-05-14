@@ -18,6 +18,7 @@ Score changes:
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -62,12 +63,43 @@ DEFAULT_SCORES = {
 }
 
 
+_initialised: bool = False
+# RLock so _init_db can call _get_conn (which calls _ensure_db) without
+# self-deadlocking on the lock the outer _ensure_db is already holding.
+_init_lock = threading.RLock()
+
+
 def _get_conn():
     TRUST_DB.parent.mkdir(parents=True, exist_ok=True)
     conn = open_db(str(TRUST_DB), timeout=15, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
+    _ensure_db()
     return conn
+
+
+def _ensure_db() -> None:
+    """Idempotent schema bootstrap on first DB use.
+
+    Replaces the module-level _init_db() call that ran at import time
+    and would create data/trust_score.db on the production filesystem
+    just because something imported the module — even from a test that
+    redirected TRUST_DB afterwards.
+    """
+    global _initialised
+    if _initialised:
+        return
+    with _init_lock:
+        if _initialised:
+            return
+        # Mark first to avoid re-entrancy through _init_db -> _get_conn ->
+        # _ensure_db loop.
+        _initialised = True
+        try:
+            _init_db()
+        except Exception:
+            _initialised = False
+            raise
 
 
 def _init_db():
@@ -97,7 +129,9 @@ def _init_db():
     conn.close()
 
 
-_init_db()
+# Schema is created lazily on first _get_conn() call (see _ensure_db).
+# Tests that need an empty DB at a tmp path can still call _init_db()
+# explicitly after monkeypatching TRUST_DB.
 
 
 def _score_to_level(score: float) -> str:

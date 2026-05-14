@@ -22,6 +22,7 @@ def shadow(tmp_path, monkeypatch):
 
     monkeypatch.setattr(shadow_store, "SHADOW_DB", tmp_path / "shadow.db")
     monkeypatch.setattr(hierarchical_store, "STORE_ROOT", tmp_path / "hm")
+    monkeypatch.setattr(shadow_store, "_initialised", False)
     shadow_store._init_db()
 
     # Stub hybrid_search.store_embedding to a no-op so approve() doesn't

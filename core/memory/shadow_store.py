@@ -17,6 +17,7 @@ Flow:
 
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -37,12 +38,33 @@ SHADOW_DB = Path(__file__).resolve().parent.parent.parent / "data" / "shadow_pro
 # access_control disagreed on /system/admin/something).
 
 
+_initialised: bool = False
+_init_lock = threading.RLock()
+
+
 def _get_conn():
     SHADOW_DB.parent.mkdir(parents=True, exist_ok=True)
     conn = open_db(str(SHADOW_DB), timeout=15, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
+    _ensure_db()
     return conn
+
+
+def _ensure_db() -> None:
+    """Idempotent schema bootstrap on first DB use."""
+    global _initialised
+    if _initialised:
+        return
+    with _init_lock:
+        if _initialised:
+            return
+        _initialised = True
+        try:
+            _init_db()
+        except Exception:
+            _initialised = False
+            raise
 
 
 def _init_db():
@@ -73,7 +95,7 @@ def _init_db():
     conn.close()
 
 
-_init_db()
+# Schema is created lazily on first _get_conn() call (see _ensure_db).
 
 
 def propose(

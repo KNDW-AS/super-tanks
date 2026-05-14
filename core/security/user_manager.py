@@ -25,6 +25,7 @@ import json
 import hashlib
 import logging
 import secrets
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,12 +62,33 @@ DEFAULT_EMERGENCY_KEYWORDS = {
 }
 
 
+_initialised: bool = False
+_init_lock = threading.RLock()
+
+
 def _get_conn():
     USER_DB.parent.mkdir(parents=True, exist_ok=True)
     conn = open_db(str(USER_DB), timeout=15, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
+    _ensure_db()
     return conn
+
+
+def _ensure_db() -> None:
+    """Idempotent schema bootstrap on first DB use."""
+    global _initialised
+    if _initialised:
+        return
+    with _init_lock:
+        if _initialised:
+            return
+        _initialised = True
+        try:
+            _init_db()
+        except Exception:
+            _initialised = False
+            raise
 
 
 def _init_db():
@@ -124,7 +146,9 @@ def _init_db():
     conn.close()
 
 
-_init_db()
+# Schema is created lazily on first _get_conn() call (see _ensure_db).
+# Tests that need an empty DB at a tmp path can still call _init_db()
+# explicitly after monkeypatching USER_DB.
 
 
 # ── PIN hashing ──────────────────────────────────────────────────────
