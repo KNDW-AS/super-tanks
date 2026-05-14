@@ -16,6 +16,7 @@ INVARIANTS (never change regardless of mode):
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from enum import Enum
@@ -78,6 +79,13 @@ NIGHT_MODE_CONFIG = {
 }
 
 # ── State ──
+# Module-level globals serialised by _state_lock. A request crossing a
+# mode-switch boundary previously could see _current_mode=AUTONOMOUS
+# alongside _autonomous_timeout_at=0 (mid-write) and apply the wrong
+# RBAC. The lock makes "mode + timeout" reads/writes mutually
+# exclusive. RLock so set_mode can call get_mode_config() without
+# self-deadlocking.
+_state_lock = threading.RLock()
 _current_mode: TankMode = TankMode.LOCKDOWN
 _autonomous_started_at: float = 0
 _autonomous_timeout_at: float = 0
@@ -87,27 +95,32 @@ _last_interaction: float = time.time()
 
 
 def get_mode() -> TankMode:
-    return _current_mode
+    with _state_lock:
+        return _current_mode
 
 
 def get_mode_config() -> dict:
-    return dict(MODE_CONFIG[_current_mode])
+    with _state_lock:
+        return dict(MODE_CONFIG[_current_mode])
 
 
 def get_config_value(key: str):
-    return MODE_CONFIG[_current_mode].get(key)
+    with _state_lock:
+        return MODE_CONFIG[_current_mode].get(key)
 
 
 def get_effective_gogate_roles(agent_id: str) -> list:
     """GO-Gate roles considering mode + trust level."""
-    base_roles = MODE_CONFIG[_current_mode].get("gogate_required_roles", ["ADMIN"])
+    with _state_lock:
+        base_roles = MODE_CONFIG[_current_mode].get("gogate_required_roles", ["ADMIN"])
+        current_mode_snapshot = _current_mode
     try:
         from core.security.trust_score import get_score
         trust = get_score(agent_id)
         level = trust["level"]
         if level == "probation":
             return ["WRITE", "EXEC", "ADMIN"]
-        if level == "junior" and _current_mode == TankMode.AUTONOMOUS:
+        if level == "junior" and current_mode_snapshot == TankMode.AUTONOMOUS:
             return ["WRITE", "EXEC", "ADMIN"]
     except Exception:
         pass
@@ -124,24 +137,25 @@ def requires_approval(tool_role: str, agent_id: str = "aeris") -> bool:
 def set_mode(new_mode: TankMode, timeout_hours: int = 8) -> dict:
     global _current_mode, _autonomous_started_at, _autonomous_timeout_at, _timeout_hours, _night_mode_active
 
-    old_mode = _current_mode
-    _current_mode = new_mode
+    with _state_lock:
+        old_mode = _current_mode
+        _current_mode = new_mode
 
-    if new_mode == TankMode.AUTONOMOUS:
-        _autonomous_started_at = time.time()
-        _timeout_hours = timeout_hours
-        _autonomous_timeout_at = _autonomous_started_at + (timeout_hours * 3600)
-        _night_mode_active = False
-        logger.warning(
-            "AUTONOMOUS aktivert — timeout om %d timar (kl %s)",
-            timeout_hours, _format_time(_autonomous_timeout_at),
-        )
-    else:
-        _autonomous_started_at = 0
-        _autonomous_timeout_at = 0
-        _night_mode_active = False
+        if new_mode == TankMode.AUTONOMOUS:
+            _autonomous_started_at = time.time()
+            _timeout_hours = timeout_hours
+            _autonomous_timeout_at = _autonomous_started_at + (timeout_hours * 3600)
+            _night_mode_active = False
+            logger.warning(
+                "AUTONOMOUS aktivert — timeout om %d timar (kl %s)",
+                timeout_hours, _format_time(_autonomous_timeout_at),
+            )
+        else:
+            _autonomous_started_at = 0
+            _autonomous_timeout_at = 0
+            _night_mode_active = False
 
-    _persist_state(old_mode, new_mode)
+        _persist_state(old_mode, new_mode)
 
     # Audit. Previously this imported core.audit_store, a module that
     # doesn't exist in this codebase, then swallowed the ImportError —
