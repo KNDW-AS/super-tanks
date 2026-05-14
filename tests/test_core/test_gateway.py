@@ -137,10 +137,10 @@ class TestAllowlistEnforcement:
         assert calls == []
         assert resp.success is True
 
-    def test_allowlist_exception_falls_through_to_execute(
+    def test_allowlist_exception_fails_closed(
             self, fake_registry, monkeypatch):
-        # If the allowlist module itself raises, the gateway logs and
-        # proceeds (documented in gateway.py:74 "— proceeding").
+        # If the allowlist module itself raises, the gateway MUST deny
+        # the call. A subsystem failure must not become a free pass.
         fake_registry["t"] = _Tool(name="t", required_role="READ",
                                    result="ok")
 
@@ -151,8 +151,8 @@ class TestAllowlistEnforcement:
 
         monkeypatch.setattr(tool_allowlists, "is_tool_allowed", boom)
         resp = asyncio.run(gateway.dispatch_tool("t", {}, "aeris", "READ"))
-        assert resp.success is True
-        assert resp.result == "ok"
+        assert resp.success is False
+        assert "Allowlist unavailable" in resp.error
 
 
 # ── Request shape passed through ───────────────────────────────────────────

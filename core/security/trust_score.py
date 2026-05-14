@@ -199,6 +199,7 @@ def set_score(agent_id: str, new_score: float, reason: str = "Manual adjustment"
     new_score = max(0.0, min(100.0, new_score))
     current = get_score(agent_id)
     old_score = current["score"]
+    old_level = current["level"]
     new_level = _score_to_level(new_score)
     _save_score(agent_id, new_score, new_level)
 
@@ -216,6 +217,18 @@ def set_score(agent_id: str, new_score: float, reason: str = "Manual adjustment"
         conn.close()
 
     logger.info("[TRUST] Manual set: %s %.1f -> %.1f (%s)", agent_id, old_score, new_score, reason)
+
+    # A manual override that crosses a level boundary still deserves
+    # the same Telegram alert as an organic level change — admin
+    # demoting to probation is precisely the kind of event we want a
+    # human to notice.
+    if new_level != old_level:
+        logger.warning(
+            "TRUST LEVEL CHANGE (manual): %s %s -> %s (%.1f -> %.1f, reason=%s)",
+            agent_id, old_level, new_level, old_score, new_score, reason,
+        )
+        _notify_level_change(agent_id, old_level, new_level, new_score,
+                             f"manual_adjust:{reason}")
 
 
 def get_event_history(agent_id: str, limit: int = 50) -> List[Dict]:

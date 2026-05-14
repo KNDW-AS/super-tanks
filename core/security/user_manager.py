@@ -405,7 +405,14 @@ def check_curfew(user_id: str) -> Dict:
         now = datetime.now()
         wake_hour = 6
 
-        if now.hour >= curfew_hour or now.hour < wake_hour:
+        # Compare minute precision: a 22:30 curfew must not trigger
+        # until 22:30 exactly. The earlier version dropped curfew_min
+        # entirely, so any HH:MM curfew effectively rounded down to HH:00.
+        now_minutes = now.hour * 60 + now.minute
+        curfew_minutes = curfew_hour * 60 + curfew_min
+        wake_minutes = wake_hour * 60
+
+        if now_minutes >= curfew_minutes or now_minutes < wake_minutes:
             return {"allowed": False, "reason": f"Curfew active (after {parsed})",
                     "goodnight": user.get("goodnight_message", "")}
     except Exception:

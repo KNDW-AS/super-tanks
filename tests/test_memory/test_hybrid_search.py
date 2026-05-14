@@ -247,19 +247,26 @@ class TestHybridSearchPipeline:
         assert "/family/preferences/lighting" in paths
         assert "/family/finance/account" not in paths
 
-    def test_admin_agent_bypasses_tripwire_abort(self, hs, monkeypatch):
-        # william/system agents proceed past tripwire abort branch.
+    def test_tripwire_fires_for_admin_agents_too(self, hs, monkeypatch):
+        # Honeypot hits are alarming regardless of who claims to be calling.
+        # An attacker who can spoof agent_id="william" must NOT walk past
+        # the tripwire silently.
         monkeypatch.setattr(hs, "vector_search",
                             lambda q, top_k=20: [{"path": "/william/secrets",
                                                    "vector_score": 0.99}])
         monkeypatch.setattr(hs, "hierarchical_search",
                             lambda q, top_k=20: [])
+
+        alarm_calls = []
+        from core.memory import access_control
+        monkeypatch.setattr(access_control, "trigger_tripwire_alarm",
+                            lambda path, agent: alarm_calls.append((path, agent)))
+
         from core.security import super_tanks_mode
         monkeypatch.setattr(super_tanks_mode, "get_mode",
                             lambda: super_tanks_mode.TankMode.LOCKDOWN)
-        from core.memory import access_control
-        # Even bypassing the abort, RBAC denies the tripwire path.
+
         result = hs.hybrid_search("x", "william", top_k=5)
-        assert result["success"] is True
-        # Empty because access_control denies tripwires unconditionally.
-        assert result["results"] == []
+        assert result["success"] is False
+        assert result["tripwire"] is True
+        assert alarm_calls == [("/william/secrets", "william")]

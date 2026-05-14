@@ -70,9 +70,10 @@ class TestApprovalRequest:
 # ── ApprovalStore: create / get ────────────────────────────────────────────
 
 class TestStoreCreateGet:
-    def test_creates_with_short_request_id(self, store):
+    def test_creates_with_full_uuid_request_id(self, store):
         req = store.create_request("shell_exec", "zeph", "reason", {"a": 1})
-        assert len(req.request_id) == 8
+        # Full UUID (36 chars incl. dashes) — collision-resistant.
+        assert len(req.request_id) == 36
         assert req.status == ApprovalStatus.PENDING
         assert req.tool_name == "shell_exec"
 

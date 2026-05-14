@@ -1,4 +1,3 @@
-import secrets
 """
 Zeph Quarantine Watcher - The Handover Security Layer
 
@@ -506,14 +505,21 @@ class ZephQuarantineService:
         self.logger = logging.getLogger('zeph.service')
         self.logger.info("ZephQuarantineService initialized")
 
-        """Set the approval_gate bridge for notifications"""
-        self.logger.info("approval_gate bridge connected")
-
     def get_queue_len(self) -> int:
-        """Abstract queue length - delegates to bridge"""
+        """Abstract queue length - delegates to the attached bridge, or 0
+        if no bridge has been attached yet."""
+        bridge = getattr(self, "go_gate_bridge", None) or \
+                 getattr(self, "approval_bridge", None)
+        if bridge and hasattr(bridge, "get_queue_len"):
+            return bridge.get_queue_len()
+        return 0
 
     def on_telegram_ready(self):
-        """Called when Telegram bot is ready - delegates to bridge"""
+        """Called when Telegram bot is ready - forwards to the attached bridge."""
+        bridge = getattr(self, "go_gate_bridge", None) or \
+                 getattr(self, "approval_bridge", None)
+        if bridge and hasattr(bridge, "on_telegram_ready"):
+            bridge.on_telegram_ready()
 
     async def start(self):
         self.logger.info("[ZEPH_QUARANTINE] STARTED - Watching quarantine/incoming")

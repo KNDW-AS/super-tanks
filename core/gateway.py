@@ -26,7 +26,7 @@ async def dispatch_tool(
     tool_name: str,
     params: Dict[str, Any],
     agent_id: str = "system",
-    agent_role: str = "EXEC",
+    agent_role: str = "READ",
     conversation_id: Optional[str] = None,
 ) -> Optional[ToolResponse]:
     """
@@ -72,7 +72,16 @@ async def dispatch_tool(
                     error=f"Tool '{tool_name}' not in allowlist for agent '{agent_id}'",
                 )
         except Exception as _al_err:
-            logger.warning("[gateway] allowlist check failed for %s/%s: %s — proceeding", agent_id, tool_name, _al_err)
+            # Fail closed: an allowlist subsystem failure must not be a
+            # free pass. Better to deny a legitimate call than to grant
+            # an unauthorised one.
+            logger.error("[gateway] allowlist check failed for %s/%s: %s — DENYING",
+                         agent_id, tool_name, _al_err)
+            return ToolResponse(
+                success=False,
+                result=None,
+                error=f"Allowlist unavailable, denying: {_al_err}",
+            )
 
     logger.debug("[gateway] dispatch: agent=%s tool=%s", agent_id, tool_name)
     return await tool.execute(request)

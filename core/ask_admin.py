@@ -149,7 +149,10 @@ class ApprovalStore:
             raw_params = raw_params[:4000] + "\n... (truncated)"
 
         request = ApprovalRequest(
-            request_id=str(uuid.uuid4())[:8],
+            # Full UUID (128 bits) — the previous 8-char truncation (32 bits)
+            # collides at ~65k requests, and INSERT OR REPLACE would silently
+            # overwrite the older row.
+            request_id=str(uuid.uuid4()),
             tool_name=tool_name,
             user_id=user_id,
             reason=reason,

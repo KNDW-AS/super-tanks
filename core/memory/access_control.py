@@ -106,7 +106,10 @@ def is_path_accessible(
             from core.security.super_tanks_mode import get_mode
             mode = get_mode().value
         except Exception:
-            mode = "lockdown"  # Fail closed
+            # "lockdown" allows sensitive (assumes human is supervising),
+            # "autonomous" denies sensitive. If we can't determine which
+            # mode we're in we must assume nobody is watching.
+            mode = "autonomous"
 
     mode_lower = mode.value if hasattr(mode, 'value') else str(mode).lower()
 
@@ -117,12 +120,17 @@ def is_path_accessible(
             agent_id, path, mode_lower,
         )
         trigger_tripwire_alarm(path, agent_id)
-        # Instant probation via trust score
+        # Instant probation via trust score. If the trust subsystem is
+        # down we log loudly — silent swallow means a tripped honeypot
+        # leaves the agent's score untouched.
         try:
             from core.security.trust_score import record_event
             record_event(agent_id, "tripwire_access", f"Accessed honeypot: {path}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error(
+                "[ACCESS_CONTROL] trust_score unavailable for tripwire event "
+                "agent=%s path=%s: %s", agent_id, path, exc,
+            )
         return False
 
     # ── Public — always allowed ──

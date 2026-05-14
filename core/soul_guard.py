@@ -74,9 +74,14 @@ def check_soul_integrity() -> Tuple[bool, str]:
     global SOUL_SAFE_MODE, SOUL_SAFE_MODE_REASON
 
     if not INTEGRITY_FILE.exists():
-        msg = "[SOUL_GUARD] soul_integrity.json not found — skipping check"
-        logger.warning(msg)
-        return True, msg
+        # A missing manifest is indistinguishable from an attacker who
+        # deleted it to silence the integrity check. Treat as tampering.
+        msg = ("[SOUL_GUARD] soul_integrity.json missing — entering SAFE MODE. "
+               "Run the soul-sealing tool to (re)generate the manifest.")
+        logger.critical(msg)
+        SOUL_SAFE_MODE = True
+        SOUL_SAFE_MODE_REASON = msg
+        return False, msg
 
     try:
         with open(INTEGRITY_FILE, "r") as f:

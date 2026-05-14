@@ -270,11 +270,11 @@ class TestModeAutoDetection:
         # mode=None → falls back to get_mode() → LOCKDOWN → sensitive allowed
         assert ac.is_path_accessible("/family/finance", "aeris", mode=None) is True
 
-    def test_mode_detection_failure_fails_closed(self, monkeypatch):
-        # If super_tanks_mode raises on import, the resolver defaults to
-        # "lockdown" which is the safe (most-restrictive) closure. We
-        # verify by checking a sensitive path becomes allowed even though
-        # we never set a mode.
+    def test_mode_detection_failure_denies_sensitive(self, monkeypatch):
+        # When super_tanks_mode is unavailable we don't know if a human
+        # is supervising. The fallback must deny sensitive access, not
+        # grant it. (Old behaviour: fallback was "lockdown", which
+        # _allows_ sensitive — a fail-OPEN gap dressed up as fail-closed.)
         broken = types.ModuleType("core.security.super_tanks_mode")
 
         def _boom():
@@ -283,7 +283,6 @@ class TestModeAutoDetection:
         broken.get_mode = _boom
         monkeypatch.setitem(sys.modules, "core.security.super_tanks_mode", broken)
 
-        # Stub other collaborators so the tripwire path can still run.
         for mod_name in ("core.security.trust_score", "core.memory.audit_log"):
             stub = types.ModuleType(mod_name)
             if mod_name.endswith("trust_score"):
@@ -295,10 +294,8 @@ class TestModeAutoDetection:
                             types.SimpleNamespace(post=lambda *a, **kw: None))
 
         from core.memory import access_control
-        # Sensitive path with no mode argument and failing detection →
-        # internal default is "lockdown" → sensitive allowed.
         assert access_control.is_path_accessible(
-            "/family/finance", "aeris", mode=None) is True
+            "/family/finance", "aeris", mode=None) is False
 
 
 # ── trigger_tripwire_alarm directly ────────────────────────────────────────

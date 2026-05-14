@@ -7,9 +7,12 @@ The gateway calls ONLY these methods. Tools implement them.
 New tools plug in behind this contract — this file never changes.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+
+_logger = logging.getLogger("diq.contract")
 
 
 @dataclass(frozen=True)
@@ -78,9 +81,15 @@ class DIQTool(ABC):
             if request.agent_role in role_hierarchy
             else -1
         )
-        required_level = (
-            role_hierarchy.index(self.required_role())
-            if self.required_role() in role_hierarchy
-            else 999
-        )
+        required = self.required_role()
+        if required not in role_hierarchy:
+            # An unknown required_role makes the tool uncallable for
+            # everyone — silently. Surface this loudly so the broken
+            # contract is fixed instead of being mistaken for working.
+            _logger.critical(
+                "DIQ contract violation: %s.required_role() = %r is not in %s",
+                type(self).__name__, required, role_hierarchy,
+            )
+            return False
+        required_level = role_hierarchy.index(required)
         return agent_level >= required_level

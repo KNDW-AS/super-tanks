@@ -102,12 +102,13 @@ class TestIntegrityClean:
 # ── check_soul_integrity — missing manifest ────────────────────────────────
 
 class TestIntegrityNoManifest:
-    def test_missing_manifest_passes_with_warning(self, soul_env):
+    def test_missing_manifest_enters_safe_mode(self, soul_env):
+        # Missing manifest is indistinguishable from tampering — fail closed.
         soul_env.manifest_path.unlink()
         ok, reason = soul_env.sg.check_soul_integrity()
-        assert ok is True
-        assert "soul_integrity.json not found" in reason
-        assert soul_env.sg.is_safe_mode() is False
+        assert ok is False
+        assert "missing" in reason.lower()
+        assert soul_env.sg.is_safe_mode() is True
 
 
 # ── check_soul_integrity — corrupt manifest ────────────────────────────────
