@@ -363,6 +363,28 @@ class ApprovalStore:
         finally:
             conn.close()
     
+    def list_pending(self, limit: int = 100) -> list:
+        """Return all pending approval requests, oldest first.
+
+        The canonical "what needs admin attention" query. Supersedes
+        go_gate_approval_daemon.get_pending_transactions, which read
+        from a parallel go_transactions table that's now
+        legacy-compat only.
+        """
+        import sqlite3
+
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT request_id, tool_name, user_id, reason, args_hash, "
+                "args_len, status, created_at, expires_at, resolved_at, "
+                "resolved_by, raw_params "
+                "FROM approval_requests "
+                "WHERE status=? AND expires_at>? "
+                "ORDER BY created_at ASC LIMIT ?",
+                (ApprovalStatus.PENDING.value, time.time(), limit),
+            ).fetchall()
+            return [self._row_to_request(r) for r in rows]
+
     def expire_old_requests(self) -> int:
         """Mark expired requests and return count. ZEF v1: BEGIN IMMEDIATE."""
         import sqlite3

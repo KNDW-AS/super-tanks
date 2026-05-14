@@ -110,7 +110,13 @@ def get_config_value(key: str):
 
 
 def get_effective_gogate_roles(agent_id: str) -> list:
-    """GO-Gate roles considering mode + trust level."""
+    """GO-Gate roles considering mode + trust level.
+
+    If the trust subsystem is unavailable we fall back to the base
+    role list and log loudly. The previous silent swallow meant a
+    probation-level agent might have its trust escalation bypass go
+    unnoticed when trust_score was down.
+    """
     with _state_lock:
         base_roles = MODE_CONFIG[_current_mode].get("gogate_required_roles", ["ADMIN"])
         current_mode_snapshot = _current_mode
@@ -122,8 +128,13 @@ def get_effective_gogate_roles(agent_id: str) -> list:
             return ["WRITE", "EXEC", "ADMIN"]
         if level == "junior" and current_mode_snapshot == TankMode.AUTONOMOUS:
             return ["WRITE", "EXEC", "ADMIN"]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error(
+            "[MODE] trust_score lookup failed for agent=%s; falling back "
+            "to base roles. This means probation/junior trust escalation "
+            "is NOT being applied. Investigate immediately. (%s)",
+            agent_id, exc,
+        )
     return base_roles
 
 

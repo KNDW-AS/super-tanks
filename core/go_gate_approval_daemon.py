@@ -213,12 +213,54 @@ def reject_transaction(tx_id: str) -> bool:
             pass
 
 
-def get_pending_transactions() -> list[sqlite3.Row]:
-    """Henter alle transaksjoner med status PENDING_HUMAN_APPROVAL."""
-    with _get_db() as conn:
-        return conn.execute(
-            "SELECT tx_id, policy_snapshot_json, created_at FROM go_transactions WHERE status = 'PENDING_HUMAN_APPROVAL'"
-        ).fetchall()
+def get_pending_transactions() -> list:
+    """Hent alle ventande godkjenningar fra BEGGE lagra (deduplisert).
+
+    Architecture review #5: Super Tanks har historisk to parallelle
+    godkjenningsstore — go_gate.db (eldre, denne fila) og
+    approval_requests.db (ApprovalStore, kanonisk i nyare kode).
+    Daemon-en må sjå begge så ingen ventande request fell mellom.
+    Resultatet er ein flat liste av dicts med ein 'tx_id'-nøkkel,
+    deduplisert på tx_id.
+    """
+    seen: dict = {}
+
+    # Legacy go_transactions table.
+    try:
+        with _get_db() as conn:
+            for row in conn.execute(
+                "SELECT tx_id, policy_snapshot_json, created_at "
+                "FROM go_transactions "
+                "WHERE status = 'PENDING_HUMAN_APPROVAL'"
+            ).fetchall():
+                seen[row["tx_id"]] = {
+                    "tx_id": row["tx_id"],
+                    "source": "go_transactions",
+                    "policy_snapshot_json": row["policy_snapshot_json"],
+                    "created_at": row["created_at"],
+                }
+    except sqlite3.OperationalError as exc:
+        log.debug("[GO_GATE] go_transactions query failed (likely fresh DB): %s", exc)
+
+    # Canonical ApprovalStore — most new code uses this.
+    try:
+        from core.ask_admin import get_approval_store
+        for req in get_approval_store().list_pending():
+            tx_id = req.request_id
+            if tx_id in seen:
+                continue
+            seen[tx_id] = {
+                "tx_id": tx_id,
+                "source": "approval_requests",
+                "tool_name": req.tool_name,
+                "user_id": req.user_id,
+                "created_at": req.created_at,
+            }
+    except Exception as exc:
+        log.warning("[GO_GATE] ApprovalStore.list_pending failed: %s", exc)
+
+    # Sort by creation time so /approve picks the oldest first.
+    return sorted(seen.values(), key=lambda r: r.get("created_at", 0))
 
 
 # ── Telegram helpers ──────────────────────────────────────────────────────────
