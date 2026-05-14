@@ -96,6 +96,16 @@ def boot_env(monkeypatch):
     fake_tw.ensure_tripwires_exist = _ensure_tw
     monkeypatch.setitem(sys.modules, "core.memory.tripwires", fake_tw)
 
+    # ── threat_scan (stubs the threat-intel registration step) ──
+    fake_ts_script = types.ModuleType("scripts.threat_scan")
+    calls["threat_intel_register"] = 0
+
+    def _fake_sources():
+        calls["threat_intel_register"] += 1
+    fake_ts_script._build_default_sources = _fake_sources
+    fake_ts_script._build_default_mitigators = lambda: None
+    monkeypatch.setitem(sys.modules, "scripts.threat_scan", fake_ts_script)
+
     # ── diq_registry ──
     fake_reg = types.ModuleType("core.diq.diq_registry")
 
@@ -187,6 +197,15 @@ class TestUpstreamTierStep:
         boot_env.tier_state["baseline_loaded_returns"] = "claude-mythos-2026-04"
         boot_env.boot_mod.boot()
         assert boot_env.tier_state["load_zef_baseline_count"] == 1
+
+
+# ── Threat-intel registration ─────────────────────────────────────────
+
+class TestThreatIntelStep:
+    def test_intel_sources_registered_at_boot(self, boot_env):
+        boot_env.boot_mod.boot()
+        assert boot_env.calls["threat_intel_register"] == 1
+        assert "register_threat_intel" in boot_env.boot_mod.get_boot_result().steps_completed
 
 
 # ── Idempotency ───────────────────────────────────────────────────────

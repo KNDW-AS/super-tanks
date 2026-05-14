@@ -147,6 +147,26 @@ def check_soul_integrity() -> Tuple[bool, str]:
     return True, "ok"
 
 
+def enter_safe_mode(reason: str) -> None:
+    """Trip SAFE_MODE from outside soul integrity (e.g. when the
+    threat monitor detects audit-chain tampering). Idempotent —
+    second call updates the reason but doesn't double-notify."""
+    global SOUL_SAFE_MODE, SOUL_SAFE_MODE_REASON
+    already = SOUL_SAFE_MODE
+    SOUL_SAFE_MODE = True
+    SOUL_SAFE_MODE_REASON = reason
+    if not already:
+        logger.critical("[SOUL_GUARD] SAFE_MODE entered: %s", reason)
+        try:
+            _send_telegram_alert(
+                "🚨 *SAFE MODE entered by threat monitor*\n\n"
+                f"```\n{reason}\n```\n\n"
+                "Investigate before resuming."
+            )
+        except Exception as exc:
+            logger.error("[SOUL_GUARD] alert send failed: %s", exc)
+
+
 def is_safe_mode() -> bool:
     """Return True if system is in soul-integrity safe mode."""
     return SOUL_SAFE_MODE

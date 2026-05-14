@@ -124,6 +124,28 @@ def _step_load_upstream_tier(result: BootResult) -> None:
     result.steps_completed.append("load_upstream_tier")
 
 
+def _step_register_threat_intel(result: BootResult) -> None:
+    """Register the production threat-intel sources + mitigators.
+
+    This step does NOT scan — scanning is the responsibility of cron
+    (`python -m scripts.threat_scan`). Registration at boot ensures
+    the source list is consistent across processes that share the
+    threat-intel registry within a single Python process (e.g. the
+    in-process scheduler some entry points enable).
+    """
+    try:
+        from scripts.threat_scan import (
+            _build_default_sources, _build_default_mitigators,
+        )
+        _build_default_sources()
+        _build_default_mitigators()
+        logger.info("[BOOT] Threat-intel sources + mitigators registered")
+    except Exception as exc:
+        logger.error("[BOOT] threat-intel registration failed: %s", exc)
+        result.errors.append(f"threat_intel: {exc}")
+    result.steps_completed.append("register_threat_intel")
+
+
 def _step_register_tools(result: BootResult) -> None:
     """Register DIQ tools/skills/adapters. The registry needs this run
     before any tool dispatch can succeed.
@@ -143,13 +165,14 @@ def _step_register_tools(result: BootResult) -> None:
 
 
 _BOOT_SEQUENCE = [
-    _step_verify_diq,           # hard fail
-    _step_check_souls,          # soft fail (safe mode)
+    _step_verify_diq,                # hard fail
+    _step_check_souls,               # soft fail (safe mode)
     _step_load_mode,
     _step_ensure_admin,
     _step_ensure_tripwires,
-    _step_load_upstream_tier,   # arms the tier-rebaseline gate
-    _step_register_tools,       # soft fail (tools/ may be absent)
+    _step_load_upstream_tier,        # arms the tier-rebaseline gate
+    _step_register_threat_intel,     # arms self-healing intel sources
+    _step_register_tools,            # soft fail (tools/ may be absent)
 ]
 
 
