@@ -145,8 +145,11 @@ def get_score(agent_id: str) -> Dict:
 def record_event(agent_id: str, event_type: str, details: str = "") -> Dict:
     """Record a trust event and update the score."""
     if event_type == "manual_adjust":
-        # For manual adjustments, the caller sets the delta via details
-        change = 0.0
+        try:
+            change = float(details) if details else 0.0
+        except (TypeError, ValueError):
+            logger.warning("[TRUST] manual_adjust: non-numeric delta %r, using 0", details)
+            change = 0.0
     elif event_type not in TRUST_EVENTS:
         logger.warning("[TRUST] Unknown event: %s", event_type)
         return {"error": f"Unknown event: {event_type}"}

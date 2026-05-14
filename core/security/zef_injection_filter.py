@@ -92,8 +92,8 @@ INJECTION_PATTERNS: List[Tuple[str, str]] = [
 
     # ── Filesystem probing — English ────────────────────────────────────
     # Only flag combined with absolute paths — never standalone path words
-    (r"\b(cat|read|show|display)\s+(the\s+)?(file\s+)?/etc/", "fs_probe"),
-    (r"\b(cat|read|show|display)\s+(the\s+)?(file\s+)?/root/", "fs_probe"),
+    (r"\b(cat|read|show|display)\s+.{0,30}/etc/", "fs_probe"),
+    (r"\b(cat|read|show|display)\s+.{0,30}/root/", "fs_probe"),
     (r"\.\./\.\./\.\.", "path_traversal"),
 
     # ── Filesystem probing — Norwegian ─────────────────────────────────
@@ -119,7 +119,7 @@ INJECTION_PATTERNS: List[Tuple[str, str]] = [
     (r"\bscreen\s+-dm", "sleeper_action"),
     (r"\btmux\s+new.*-d", "sleeper_action"),
     (r"\bsystemctl\s+enable\b", "sleeper_action"),
-    (r"\bthreading\.Timer\b", "sleeper_action"),
+    (r"\bthreading\.timer\b", "sleeper_action"),
     (r"\bsched\.scheduler\b", "sleeper_action"),
     (r"\bapscheduler\b", "sleeper_action"),
 ]

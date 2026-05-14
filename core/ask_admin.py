@@ -687,7 +687,7 @@ def check_tool_permission_iron_link(
     # FAMILY 18+ can do MEDIUM, but need Iron Link approval
     
     # Check for existing approved request (re-use)
-    existing_approved = store.find_recent_approval(tool_name, user_id, args)
+    existing_approved = store.find_approved_request(tool_name, user_id, args)
     if existing_approved:
         return True, existing_approved.request_id, "approved_from_cache"
     
@@ -707,7 +707,7 @@ def check_tool_permission_iron_link(
     if result == ApprovalResult.APPROVED:
         # Get the request_id from the store
         # (ask_admin_iron_link creates and resolves it)
-        recent = store.find_recent_approval(tool_name, user_id, args)
+        recent = store.find_approved_request(tool_name, user_id, args)
         req_id = recent.request_id if recent else None
         return True, req_id, message
     elif result == ApprovalResult.DENIED:
