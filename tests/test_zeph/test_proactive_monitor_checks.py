@@ -151,38 +151,27 @@ class TestIntegrityChecks:
         result = pm._check_diq_integrity()
         assert result["status"] == "critical"
 
-    def test_soul_integrity_missing_manifest(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(pm, "REPO_ROOT", tmp_path)
-        result = pm._check_soul_integrity()
-        assert result["status"] == "warning"
-
-    def test_soul_integrity_clean(self, monkeypatch, tmp_path):
-        import hashlib, json
-        core = tmp_path / "core"
-        core.mkdir()
-        soul = core / "aeris_soul.py"
-        soul.write_bytes(b"clean soul")
-        manifest = {"souls": {
-            "aeris": {"file": "core/aeris_soul.py",
-                      "sha256": hashlib.sha256(b"clean soul").hexdigest()}}}
-        (core / "soul_integrity.json").write_text(json.dumps(manifest))
-        monkeypatch.setattr(pm, "REPO_ROOT", tmp_path)
+    def test_soul_integrity_delegates_to_soul_guard_ok(self, monkeypatch):
+        # The check now routes through soul_guard so the SAFE_MODE flag
+        # actually gets set on tampering — the previous standalone
+        # implementation only reported, never enforced.
+        fake_sg = types.ModuleType("core.soul_guard")
+        fake_sg.check_soul_integrity = lambda: (True, "ok")
+        fake_sg.is_safe_mode = lambda: False
+        monkeypatch.setitem(sys.modules, "core.soul_guard", fake_sg)
         result = pm._check_soul_integrity()
         assert result["status"] == "ok"
+        assert result["safe_mode"] is False
 
-    def test_soul_integrity_critical_on_mismatch(self, monkeypatch, tmp_path):
-        import hashlib, json
-        core = tmp_path / "core"
-        core.mkdir()
-        soul = core / "aeris_soul.py"
-        soul.write_bytes(b"tampered soul")
-        manifest = {"souls": {
-            "aeris": {"file": "core/aeris_soul.py",
-                      "sha256": hashlib.sha256(b"original").hexdigest()}}}
-        (core / "soul_integrity.json").write_text(json.dumps(manifest))
-        monkeypatch.setattr(pm, "REPO_ROOT", tmp_path)
+    def test_soul_integrity_tampering_sets_safe_mode(self, monkeypatch):
+        fake_sg = types.ModuleType("core.soul_guard")
+        fake_sg.check_soul_integrity = lambda: (False, "aeris hash mismatch")
+        fake_sg.is_safe_mode = lambda: True
+        monkeypatch.setitem(sys.modules, "core.soul_guard", fake_sg)
         result = pm._check_soul_integrity()
         assert result["status"] == "critical"
+        assert result["safe_mode"] is True
+        assert "aeris" in result["souls"].lower()
 
 
 # ── DB-backed checks (missing DBs → ok with message) ──────────────────────
@@ -230,36 +219,39 @@ class TestTrustCheck:
 # ── Tripwire status ────────────────────────────────────────────────────────
 
 class TestTripwireStatus:
-    def test_missing_manifest_warning(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(pm, "REPO_ROOT", tmp_path)
-        assert pm._check_tripwire_status()["status"] == "warning"
-
-    def test_clean_manifest_ok(self, monkeypatch, tmp_path):
-        import hashlib, json
-        locked = tmp_path / "core_locked"
-        locked.mkdir()
-        target = tmp_path / "x.py"
-        target.write_bytes(b"hello")
-        manifest = {"frozen_files": [
-            {"path": "x.py", "sha256": hashlib.sha256(b"hello").hexdigest()},
-        ]}
-        (locked / "FROZEN_MANIFEST.json").write_text(json.dumps(manifest))
-        monkeypatch.setattr(pm, "REPO_ROOT", tmp_path)
+    def test_all_honeypots_present_and_canary_intact(self, monkeypatch, tmp_path):
+        # Deploy real tripwires in a tmp store and verify the check
+        # reports ok.
+        from core.memory import hierarchical_store
+        from core.memory.tripwires import ensure_tripwires_exist
+        monkeypatch.setattr(hierarchical_store, "STORE_ROOT", tmp_path / "hm")
+        ensure_tripwires_exist(hierarchical_store.HierarchicalMemoryStore())
         result = pm._check_tripwire_status()
         assert result["status"] == "ok"
-        assert result["violations"] == []
+        assert result["missing"] == []
+        assert result["tampered"] == []
+        assert result["checked"] >= 5
 
-    def test_tampered_yields_critical(self, monkeypatch, tmp_path):
-        import hashlib, json
-        locked = tmp_path / "core_locked"
-        locked.mkdir()
-        target = tmp_path / "x.py"
-        target.write_bytes(b"TAMPERED")
-        manifest = {"frozen_files": [
-            {"path": "x.py", "sha256": hashlib.sha256(b"original").hexdigest()},
-        ]}
-        (locked / "FROZEN_MANIFEST.json").write_text(json.dumps(manifest))
-        monkeypatch.setattr(pm, "REPO_ROOT", tmp_path)
+    def test_missing_honeypot_is_critical(self, monkeypatch, tmp_path):
+        # No deployment → every honeypot is missing.
+        from core.memory import hierarchical_store
+        monkeypatch.setattr(hierarchical_store, "STORE_ROOT", tmp_path / "hm")
         result = pm._check_tripwire_status()
         assert result["status"] == "critical"
-        assert any("TAMPERED" in v for v in result["violations"])
+        assert len(result["missing"]) >= 5
+
+    def test_modified_canary_is_critical(self, monkeypatch, tmp_path):
+        # Deploy then tamper with one honeypot's l2_full content.
+        from core.memory import hierarchical_store
+        from core.memory.tripwires import (
+            ensure_tripwires_exist, get_tripwire_paths,
+        )
+        monkeypatch.setattr(hierarchical_store, "STORE_ROOT", tmp_path / "hm")
+        store = hierarchical_store.HierarchicalMemoryStore()
+        ensure_tripwires_exist(store)
+        target = get_tripwire_paths()[0]
+        # Overwrite the canary with attacker-controlled content.
+        store.store(target, "fake abs", "fake ov", "ATTACKER_CONTENT")
+        result = pm._check_tripwire_status()
+        assert result["status"] == "critical"
+        assert target in result["tampered"]

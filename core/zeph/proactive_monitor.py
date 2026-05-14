@@ -243,40 +243,26 @@ def _check_diq_integrity() -> Dict[str, Any]:
 
 
 def _check_soul_integrity() -> Dict[str, Any]:
-    """Verify SHA256 of aeris_soul.py and zeph_soul.py against sealed manifest."""
+    """Verify SHA256 of aeris_soul.py / zeph_soul.py and force SAFE MODE
+    on mismatch.
+
+    The architecture review flagged that this daily check only logged —
+    a soul file modified at runtime would be detected, the report would
+    say "critical", and nothing would actually constrain Aeris/Zeph.
+    Now we route through soul_guard.check_soul_integrity, which sets
+    the global SOUL_SAFE_MODE flag the dispatchers consult. Daily
+    re-check turns one-shot boot integrity into an enforced invariant.
+    """
     try:
-        integrity_file = REPO_ROOT / "core" / "soul_integrity.json"
-        if not integrity_file.exists():
-            return {"status": "warning", "message": "soul_integrity.json not found"}
-
-        manifest = json.loads(integrity_file.read_text())
-        results = {}
-        all_ok = True
-
-        for name, entry in manifest.get("souls", {}).items():
-            soul_path = REPO_ROOT / entry["file"]
-            expected_hash = entry["sha256"]
-
-            if not soul_path.exists():
-                results[name] = "MISSING"
-                all_ok = False
-                continue
-
-            h = hashlib.sha256()
-            with open(soul_path, "rb") as f:
-                for chunk in iter(lambda: f.read(65536), b""):
-                    h.update(chunk)
-            actual_hash = h.hexdigest()
-
-            if actual_hash == expected_hash:
-                results[name] = "verified"
-            else:
-                results[name] = f"MISMATCH (expected {expected_hash[:16]}...)"
-                all_ok = False
-
+        from core.soul_guard import check_soul_integrity, is_safe_mode
+        ok, reason = check_soul_integrity()
+        if ok:
+            return {"status": "ok", "souls": "verified",
+                    "safe_mode": is_safe_mode()}
         return {
-            "status": "ok" if all_ok else "critical",
-            "souls": results,
+            "status": "critical",
+            "souls": reason,
+            "safe_mode": is_safe_mode(),
         }
     except Exception as exc:
         logger.warning("soul_integrity check failed: %s", exc)
@@ -357,36 +343,40 @@ def _check_outdated_packages() -> Dict[str, Any]:
 
 
 def _check_tripwire_status() -> Dict[str, Any]:
-    """Check if frozen file manifests are intact (verify_frozen.py logic)."""
+    """Verify every honeypot path is still present and unmodified.
+
+    The previous implementation pointed at core_locked/FROZEN_MANIFEST.json,
+    a manifest file that doesn't exist in this repo — the check was
+    dead, returning "warning: file not found" forever.
+
+    The real tripwire surface is the set of honeypot memory files
+    deployed by core.memory.tripwires.ensure_tripwires_exist. Each one
+    should contain the canary value `TRIPWIRE_CANARY`. If any are
+    missing or modified, that's a CRITICAL signal — somebody tampered
+    with the honeypots themselves.
+    """
     try:
-        manifest_path = REPO_ROOT / "core_locked" / "FROZEN_MANIFEST.json"
-        if not manifest_path.exists():
-            return {"status": "warning", "message": "FROZEN_MANIFEST.json not found"}
+        from core.memory.hierarchical_store import HierarchicalMemoryStore
+        from core.memory.tripwires import TRIPWIRE_CANARY, get_tripwire_paths
 
-        manifest = json.loads(manifest_path.read_text())
-        violations = []
+        store = HierarchicalMemoryStore()
+        missing: list = []
+        tampered: list = []
 
-        for file_info in manifest.get("frozen_files", []):
-            filepath = REPO_ROOT / file_info["path"]
-            expected_hash = file_info["sha256"]
-
-            if not filepath.exists():
-                violations.append(f"MISSING: {file_info['path']}")
+        for tw_path in get_tripwire_paths():
+            entry = store.read(tw_path, level=2)
+            if entry is None:
+                missing.append(tw_path)
                 continue
+            if getattr(entry, "l2_full", None) != TRIPWIRE_CANARY:
+                tampered.append(tw_path)
 
-            h = hashlib.sha256()
-            with open(filepath, "rb") as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    h.update(chunk)
-            actual_hash = h.hexdigest()
-
-            if actual_hash != expected_hash:
-                violations.append(f"TAMPERED: {file_info['path']}")
-
+        ok = not missing and not tampered
         return {
-            "status": "critical" if violations else "ok",
-            "violations": violations,
-            "checked": len(manifest.get("frozen_files", [])),
+            "status": "ok" if ok else "critical",
+            "checked": len(get_tripwire_paths()),
+            "missing": missing,
+            "tampered": tampered,
         }
     except Exception as exc:
         logger.warning("tripwire_status check failed: %s", exc)
