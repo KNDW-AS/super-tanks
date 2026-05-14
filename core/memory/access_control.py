@@ -42,10 +42,18 @@ _PATH_CLASSIFICATIONS: list[Tuple[str, str]] = [
     ("/zeph/successful_patterns", "agent_private:zeph"),
 
     # ── Sensitive (lockdown-only access) ──
+    # Includes the parent directories of the system-level tripwires
+    # so any path inside /system/admin/* or /system/passwords/* still
+    # requires manual review even when it's not the specific honeypot.
+    # (shadow_store imports this table — the previous separate
+    # SENSITIVE_PREFIXES list drifted from this one.)
     ("/family/finance", "sensitive"),
     ("/family/health", "sensitive"),
     ("/system/config", "sensitive"),
+    ("/system/admin", "sensitive"),
+    ("/system/passwords", "sensitive"),
     ("/william/work", "sensitive"),
+    ("/william/age", "sensitive"),
 
     # ── Public (always accessible) ──
     ("/family/preferences", "public"),

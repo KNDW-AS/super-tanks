@@ -28,11 +28,13 @@ logger = logging.getLogger("super_tanks.memory.shadow")
 
 SHADOW_DB = Path(__file__).resolve().parent.parent.parent / "data" / "shadow_proposals.db"
 
-# Paths that always require manual review
-SENSITIVE_PREFIXES = [
-    "/william/age", "/family/health", "/family/finance",
-    "/system/config", "/system/passwords", "/system/admin",
-]
+# Single source of truth for path classification lives in
+# core.memory.access_control. Anything classified as "sensitive" or
+# "tripwire" requires manual shadow review here. The previous
+# SENSITIVE_PREFIXES list was a parallel copy that drifted out of sync
+# with the classification table (e.g. it had /system/admin while
+# access_control had only /system/admin_keys, so shadow_store and
+# access_control disagreed on /system/admin/something).
 
 
 def _get_conn():
@@ -325,10 +327,7 @@ def expire_old_proposals() -> int:
 
 
 def _is_sensitive_path(path: str) -> bool:
-    normalized = "/" + path.strip("/")
-    # Boundary-aware: /family/finance matches but /family/finance_other
-    # does not. Plain startswith would over-classify siblings.
-    return any(
-        normalized == p or normalized.startswith(p + "/")
-        for p in SENSITIVE_PREFIXES
-    )
+    """True if access_control would classify this path as sensitive or
+    tripwire — either requires manual review here."""
+    from core.memory.access_control import get_path_classification
+    return get_path_classification(path) in ("sensitive", "tripwire")
