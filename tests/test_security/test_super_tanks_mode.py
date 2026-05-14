@@ -27,6 +27,8 @@ def stm(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_timeout_hours", 8)
     monkeypatch.setattr(m, "_night_mode_active", False)
     monkeypatch.setattr(m, "_last_interaction", time.time())
+    monkeypatch.setattr(m, "_MODEL_TIER_FINGERPRINT", None)
+    monkeypatch.setattr(m, "_LAST_BASELINED_TIER", None)
 
     state_file = tmp_path / "super_tanks_state.json"
     monkeypatch.setattr(m, "STATE_FILE", state_file)
@@ -355,3 +357,63 @@ class TestGetEffectiveMode:
         info = stm.m.get_effective_mode()
         assert info["night_mode"] is True
         assert "🌙" in info["display"]
+
+
+# ── Tier-rebaseline gate ───────────────────────────────────────────────────
+
+class TestTierRebaseline:
+    """Force ZEF re-baseline before AUTONOMOUS on a new upstream model.
+
+    A new Claude / Gemini tier may have different refusal training. Our
+    ZEF false-positive / true-positive measurements were taken against
+    the previous tier. Until those are re-measured against the new
+    tier, AUTONOMOUS would grant wider autonomy to a model whose
+    safety surface is unmeasured.
+    """
+
+    def test_no_tier_set_means_no_rebaseline(self, stm):
+        # Legacy / pre-Mythos: tier tracking unused → never blocks.
+        assert stm.m.needs_rebaseline() is False
+        stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
+        assert stm.m.get_mode() == stm.m.TankMode.AUTONOMOUS
+
+    def test_baseline_matches_current_tier(self, stm):
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-mythos-2026-04")
+        assert stm.m.needs_rebaseline() is False
+
+    def test_baseline_mismatched_tier_needs_rebaseline(self, stm):
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-sonnet-4-6")
+        assert stm.m.needs_rebaseline() is True
+
+    def test_tier_set_without_baseline_needs_rebaseline(self, stm):
+        # New tier observed but no baseline ever recorded.
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        assert stm.m.needs_rebaseline() is True
+
+    def test_set_mode_autonomous_refused_when_stale(self, stm):
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-sonnet-4-6")
+        with pytest.raises(stm.m.StaleBaselineError):
+            stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
+        # Mode must NOT have flipped; still LOCKDOWN.
+        assert stm.m.get_mode() == stm.m.TankMode.LOCKDOWN
+
+    def test_set_mode_lockdown_never_blocked_by_stale_baseline(self, stm):
+        # Going TO lockdown is always safe — only AUTONOMOUS is gated.
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-sonnet-4-6")
+        # Pretend we were already AUTONOMOUS somehow (e.g. legacy state).
+        # set_mode(LOCKDOWN) must never raise.
+        stm.m.set_mode(stm.m.TankMode.LOCKDOWN)
+        assert stm.m.get_mode() == stm.m.TankMode.LOCKDOWN
+
+    def test_remediation_flow_unblocks_autonomous(self, stm):
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-sonnet-4-6")
+        # Operator runs the corpus and signs off on the new tier.
+        stm.m.mark_zef_baselined("claude-mythos-2026-04")
+        # Now AUTONOMOUS is allowed.
+        stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
+        assert stm.m.get_mode() == stm.m.TankMode.AUTONOMOUS

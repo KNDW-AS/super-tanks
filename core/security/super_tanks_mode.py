@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from enum import Enum
 from datetime import datetime, timezone
+from typing import Optional
 
 logger = logging.getLogger("super_tanks.mode")
 
@@ -33,6 +34,13 @@ STATE_FILE = Path(__file__).resolve().parent.parent.parent / "config" / "super_t
 class TankMode(Enum):
     LOCKDOWN = "lockdown"
     AUTONOMOUS = "autonomous"
+
+
+class StaleBaselineError(RuntimeError):
+    """Raised when AUTONOMOUS is requested but the ZEF baseline does not
+    cover the current upstream model tier. Operator must run the redteam
+    corpus against the new tier and call `mark_zef_baselined()` first.
+    """
 
 
 MODE_CONFIG = {
@@ -80,6 +88,47 @@ NIGHT_MODE_CONFIG = {
         "propose_code_change", "memory_delete",
     ],
 }
+
+# ── Upstream model-tier tracking ──
+# When the upstream Claude / Gemini / etc. ships a new tier
+# (e.g. Mythos-class), the ZEF false-positive/false-negative
+# baseline measured against the old tier no longer applies. Force
+# a re-baseline before allowing AUTONOMOUS, otherwise we'd grant
+# wider autonomy to a model whose refusal training is uncalibrated
+# against our filter.
+#
+# Production callers update _MODEL_TIER_FINGERPRINT (an opaque
+# string like "claude-mythos-2026-04") whenever they detect a new
+# upstream model in BRAIN_CONFIG. A mismatch with the last-baselined
+# fingerprint forces set_mode(AUTONOMOUS) to refuse with a clear error.
+
+_MODEL_TIER_FINGERPRINT: Optional[str] = None
+_LAST_BASELINED_TIER: Optional[str] = None
+
+
+def set_current_model_tier(fingerprint: str) -> None:
+    """Production hook: call when the upstream LLM provider changes."""
+    global _MODEL_TIER_FINGERPRINT
+    with _state_lock:
+        _MODEL_TIER_FINGERPRINT = fingerprint
+
+
+def mark_zef_baselined(fingerprint: str) -> None:
+    """Call after running the ZEF redteam corpus against a new tier
+    and confirming the FPR/block-rate floor still holds."""
+    global _LAST_BASELINED_TIER
+    with _state_lock:
+        _LAST_BASELINED_TIER = fingerprint
+
+
+def needs_rebaseline() -> bool:
+    """True if the upstream tier has changed since the last baseline."""
+    with _state_lock:
+        if _MODEL_TIER_FINGERPRINT is None:
+            # Not yet set — assume legacy / pre-Mythos.
+            return False
+        return _LAST_BASELINED_TIER != _MODEL_TIER_FINGERPRINT
+
 
 # ── State ──
 # Module-level globals serialised by _state_lock. A request crossing a
@@ -150,6 +199,19 @@ def requires_approval(tool_role: str, agent_id: str = "aeris") -> bool:
 
 def set_mode(new_mode: TankMode, timeout_hours: int = 8) -> dict:
     global _current_mode, _autonomous_started_at, _autonomous_timeout_at, _timeout_hours, _night_mode_active
+
+    # Tier-rebaseline gate: never grant AUTONOMOUS to a model whose
+    # tier hasn't been re-tested against the ZEF redteam corpus. The
+    # check happens BEFORE we acquire _state_lock for the mutation
+    # path so the error message can quote the two fingerprints; the
+    # read inside `needs_rebaseline()` takes the lock itself.
+    if new_mode == TankMode.AUTONOMOUS and needs_rebaseline():
+        raise StaleBaselineError(
+            f"AUTONOMOUS refused: ZEF baseline covers "
+            f"{_LAST_BASELINED_TIER!r} but upstream tier is "
+            f"{_MODEL_TIER_FINGERPRINT!r}. Run the redteam corpus "
+            f"and call mark_zef_baselined() before re-attempting."
+        )
 
     with _state_lock:
         old_mode = _current_mode

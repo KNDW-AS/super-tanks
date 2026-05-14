@@ -123,6 +123,43 @@ class TestEscalationReason:
 
 # ── Shared responsibility list ─────────────────────────────────────────────
 
+class TestVerifyOrDrop:
+    """R-06: every A2A receive path MUST go through verify_or_drop.
+    Unsigned or forged messages are dropped silently to the caller
+    but logged."""
+
+    def _signed_msg(self, monkeypatch, **fields):
+        from core.security import agent_identity
+        from core.diq.diq_a2a import A2AMessage
+        monkeypatch.setattr(agent_identity, "_KEY", b"test-a2a-verify-key")
+        base = dict(sender="aeris", recipient="zeph",
+                    message_type="request", payload={"x": 1},
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    correlation_id="c-1")
+        base.update(fields)
+        return agent_identity.sign_a2a_message(A2AMessage(**base))
+
+    def test_valid_signed_message_returned(self, monkeypatch):
+        signed = self._signed_msg(monkeypatch)
+        assert er.verify_or_drop(signed) is signed
+
+    def test_unsigned_message_dropped(self, monkeypatch):
+        from core.diq.diq_a2a import A2AMessage
+        msg = A2AMessage(sender="aeris", recipient="zeph",
+                         message_type="request")
+        assert er.verify_or_drop(msg) is None
+
+    def test_forged_sender_dropped(self, monkeypatch):
+        from core.security import agent_identity
+        from dataclasses import replace
+        signed = self._signed_msg(monkeypatch)
+        forged = replace(signed, sender="william")  # claim admin
+        assert er.verify_or_drop(forged) is None
+
+    def test_none_input_returns_none(self):
+        assert er.verify_or_drop(None) is None
+
+
 class TestSharedResponsibility:
     def test_shared_list_is_nonempty(self):
         assert len(er.SHARED_RESPONSIBILITY) > 0
