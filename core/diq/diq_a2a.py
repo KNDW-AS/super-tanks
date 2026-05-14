@@ -15,13 +15,23 @@ from typing import Any, Dict, List, Optional
 
 @dataclass(frozen=True)
 class A2AMessage:
-    """Immutable A2A message envelope."""
+    """Immutable A2A message envelope.
+
+    `signature` is an HMAC over the canonical JSON of the other fields,
+    produced by core.security.agent_identity.sign_a2a_message(...).
+    Channels MUST reject messages whose signature does not verify —
+    otherwise a compromised agent could forge `sender` to escalate.
+    The default `None` means "unsigned" and is intended for backward
+    compatibility during migration; production handlers must require
+    `signature is not None`.
+    """
     sender: str                        # "aeris" or "zeph"
     recipient: str                     # "aeris" or "zeph"
     message_type: str                  # "request", "response", "notify"
     payload: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     correlation_id: Optional[str] = None
+    signature: Optional[str] = None
 
 
 class DIQA2AChannel(ABC):

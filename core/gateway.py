@@ -1,16 +1,28 @@
 """
 core/gateway.py — DIQ-Aware Tool Routing Gateway
 ==================================================
-Phase 2.3: Single dispatch point for all tool calls.
+Single dispatch point for all tool calls.
 
-This module imports ONLY from core/diq/. It knows nothing about tools/approved/
-or any specific implementation. The DIQ registry provides everything.
+This module imports ONLY from core/diq/ and core/security/. It knows
+nothing about tools/approved/ or any specific implementation. The DIQ
+registry provides everything.
 
 Usage (from tool_registry.py handler):
     from core.gateway import dispatch_tool
-    result = await dispatch_tool(tool_name, params, agent_id, agent_role)
+    from core.security.agent_identity import issue_identity
 
-If no DIQ wrapper exists for the tool, returns None → caller falls back to run_fn.
+    token = issue_identity("aeris")  # issued at agent process spawn
+    result = await dispatch_tool(
+        tool_name, params, "aeris", "READ", identity_token=token,
+    )
+
+The identity_token is verified against an HMAC signature the agent
+process cannot forge. Without it, the gateway refuses to dispatch
+even for the privileged "system" / "internal" / "test" identifiers —
+those still need a real token, issued by a trusted in-process caller.
+
+If no DIQ wrapper exists for the tool, returns None → caller falls
+back to run_fn.
 """
 
 import logging
@@ -25,17 +37,44 @@ logger = logging.getLogger("gateway")
 async def dispatch_tool(
     tool_name: str,
     params: Dict[str, Any],
-    agent_id: str = "system",
+    agent_id: str,
     agent_role: str = "READ",
+    *,
+    identity_token: Optional[str] = None,
     conversation_id: Optional[str] = None,
 ) -> Optional[ToolResponse]:
     """
     Route a tool call through the DIQ registry.
 
+    Args:
+        tool_name: Registered tool name.
+        params: Tool parameters.
+        agent_id: Claimed agent identity.
+        agent_role: Minimum role the caller asserts.
+        identity_token: HMAC signature of agent_id, produced by
+            `core.security.agent_identity.issue_identity(agent_id)`.
+            Required — no anonymous dispatch.
+        conversation_id: Optional tracing context.
+
     Returns:
-        ToolResponse if a DIQ wrapper exists for tool_name.
-        None if no DIQ wrapper exists (caller should fall back to direct run_fn).
+        ToolResponse if a DIQ wrapper exists for tool_name (success or
+        failure). None if no wrapper exists — caller should fall back
+        to the plugin run_fn.
     """
+    # Identity verification BEFORE the DIQ lookup so we don't leak the
+    # registered tool surface to unauthenticated callers.
+    from core.security.agent_identity import verify_identity
+    if not verify_identity(agent_id, identity_token):
+        logger.warning(
+            "[gateway] DENIED unauthenticated dispatch: agent=%r tool=%r",
+            agent_id, tool_name,
+        )
+        return ToolResponse(
+            success=False,
+            result=None,
+            error="Identity verification failed",
+        )
+
     tool = get_tool(tool_name)
     if tool is None:
         return None  # No DIQ wrapper — fall back to plugin run_fn
@@ -60,8 +99,11 @@ async def dispatch_tool(
             error=f"Access denied: {tool_name} requires role {tool.required_role()}, agent {agent_id} has {agent_role}",
         )
 
-    # Allowlist enforcement — defense-in-depth (agent must be explicitly listed)
-    # Only enforced for named agents; "system" and internal callers bypass.
+    # Allowlist enforcement — defense-in-depth. Named agents must be in
+    # the explicit allowlist. The synthetic "system" / "internal" / "test"
+    # identifiers still need a valid identity_token (verified above), so
+    # they're no longer free passes, but they don't have entries in the
+    # per-agent allowlist either.
     if agent_id not in ("system", "internal", "test"):
         try:
             from core.security.tool_allowlists import is_tool_allowed
@@ -73,8 +115,7 @@ async def dispatch_tool(
                 )
         except Exception as _al_err:
             # Fail closed: an allowlist subsystem failure must not be a
-            # free pass. Better to deny a legitimate call than to grant
-            # an unauthorised one.
+            # free pass.
             logger.error("[gateway] allowlist check failed for %s/%s: %s — DENYING",
                          agent_id, tool_name, _al_err)
             return ToolResponse(

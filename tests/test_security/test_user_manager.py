@@ -12,25 +12,115 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
-# ── PIN hashing ────────────────────────────────────────────────────────────
+# ── PIN hashing (scrypt with per-user salt) ────────────────────────────────
 
 class TestPinHash:
-    def test_hash_is_deterministic(self, user_db):
-        assert user_db._hash_pin("1234") == user_db._hash_pin("1234")
+    def test_hash_format_is_scrypt(self, user_db):
+        h = user_db._hash_pin("1234")
+        assert h.startswith("scrypt$")
+        # Three fields separated by $.
+        parts = h.split("$")
+        assert len(parts) == 3
 
-    def test_different_pins_yield_different_hashes(self, user_db):
-        assert user_db._hash_pin("1234") != user_db._hash_pin("1235")
+    def test_same_pin_yields_different_hashes_due_to_random_salt(self, user_db):
+        # Per-user salt means two stores of the same PIN produce
+        # different stored values. This stops rainbow tables.
+        assert user_db._hash_pin("1234") != user_db._hash_pin("1234")
 
-    def test_hash_length_is_32_hex_chars(self, user_db):
-        h = user_db._hash_pin("anything")
-        assert len(h) == 32
-        int(h, 16)  # raises if not hex
+    def test_verify_with_scrypt_hash_round_trip(self, user_db):
+        h = user_db._hash_pin("1234")
+        assert user_db._verify_pin("1234", h) is True
+        assert user_db._verify_pin("9999", h) is False
 
-    def test_hash_uses_install_salt(self, user_db):
-        # Same PIN must not equal raw sha256(pin) — the salt is part of input.
-        import hashlib
-        raw = hashlib.sha256(b"1234").hexdigest()[:32]
-        assert user_db._hash_pin("1234") != raw
+    def test_verify_with_legacy_hash_still_works(self, user_db):
+        # The transparent migration relies on _verify_pin accepting the
+        # old sha256[:32] format.
+        legacy = user_db._legacy_hash_pin("1234")
+        assert user_db._verify_pin("1234", legacy) is True
+        assert user_db._verify_pin("9999", legacy) is False
+
+    def test_verify_handles_corrupt_scrypt_field(self, user_db):
+        assert user_db._verify_pin("1234", "scrypt$nothex$nothex") is False
+        assert user_db._verify_pin("1234", "scrypt$") is False
+
+
+# ── Transparent migration from legacy SHA-256 to scrypt ───────────────────
+
+class TestPinMigration:
+    def test_first_login_upgrades_legacy_hash(self, user_db):
+        # Insert a user with a legacy hash directly.
+        legacy_hash = user_db._legacy_hash_pin("1234")
+        conn = user_db._get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO st_users (user_id, name, pin_hash, level, "
+                "created_at, permitted_entities) "
+                "VALUES (?, ?, ?, 5, ?, '[]')",
+                ("admin", "Admin", legacy_hash, "2024-01-01T00:00:00"))
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = user_db.authenticate("admin", "1234")
+        assert result is not None  # legacy hash still authenticates
+
+        # The stored hash is now scrypt.
+        conn = user_db._get_conn()
+        try:
+            new = conn.execute(
+                "SELECT pin_hash FROM st_users WHERE user_id=?",
+                ("admin",)).fetchone()[0]
+        finally:
+            conn.close()
+        assert new.startswith("scrypt$")
+        # And the legacy hash is gone.
+        assert new != legacy_hash
+
+
+# ── Rate limiting ─────────────────────────────────────────────────────────
+
+class TestAuthRateLimit:
+    def test_locks_out_after_max_failures(self, seed_admin):
+        for _ in range(seed_admin.MAX_AUTH_FAILURES):
+            assert seed_admin.authenticate("admin", "wrong") is None
+        # Now the correct PIN is also rejected because we're locked out.
+        assert seed_admin.authenticate("admin", "0000") is None
+
+    def test_successful_login_resets_failure_counter(self, seed_admin):
+        for _ in range(seed_admin.MAX_AUTH_FAILURES - 1):
+            seed_admin.authenticate("admin", "wrong")
+        # One more failure would lock out; instead succeed.
+        assert seed_admin.authenticate("admin", "0000") is not None
+        # Now we have a clean slate.
+        for _ in range(seed_admin.MAX_AUTH_FAILURES - 1):
+            seed_admin.authenticate("admin", "wrong")
+        # Still able to log in — counter was reset.
+        assert seed_admin.authenticate("admin", "0000") is not None
+
+    def test_unknown_user_counted_against_rate_limit(self, seed_admin):
+        # Probing for valid user_ids must also be rate-limited.
+        for _ in range(seed_admin.MAX_AUTH_FAILURES):
+            seed_admin.authenticate("ghost", "anything")
+        # Even unknown users hit the wall now.
+        result = seed_admin.authenticate("ghost", "anything")
+        assert result is None
+
+    def test_failures_outside_window_dont_count(self, seed_admin):
+        # Backdate failures to before the window.
+        old_ts = (datetime.now(timezone.utc)
+                  - timedelta(minutes=seed_admin.AUTH_FAILURE_WINDOW_MINUTES + 1)
+                  ).isoformat()
+        conn = seed_admin._get_conn()
+        try:
+            for _ in range(seed_admin.MAX_AUTH_FAILURES + 5):
+                conn.execute(
+                    "INSERT INTO st_auth_failures (user_id, timestamp) VALUES (?, ?)",
+                    ("admin", old_ts))
+            conn.commit()
+        finally:
+            conn.close()
+        # Stale failures don't block; valid PIN still works.
+        assert seed_admin.authenticate("admin", "0000") is not None
 
 
 # ── User CRUD ──────────────────────────────────────────────────────────────

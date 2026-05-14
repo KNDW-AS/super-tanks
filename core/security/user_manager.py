@@ -109,6 +109,17 @@ def _init_db():
             details TEXT
         )
     """)
+    # Failed-auth attempts for rate limiting. One row per failure;
+    # purged opportunistically by _is_locked_out.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS st_auth_failures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_failures_user "
+                 "ON st_auth_failures(user_id, timestamp)")
     conn.commit()
     conn.close()
 
@@ -116,8 +127,59 @@ def _init_db():
 _init_db()
 
 
+# ── PIN hashing ──────────────────────────────────────────────────────
+#
+# Legacy format: 32 hex chars of SHA-256 with a hard-coded global salt.
+# That's GPU-crackable in microseconds for a 4-digit PIN space.
+#
+# New format: "scrypt$<salt_hex>$<digest_hex>" — per-user salt, modern
+# memory-hard KDF (stdlib hashlib.scrypt, no new dep). On successful
+# legacy auth we transparently upgrade the stored hash.
+
+_SCRYPT_N = 2 ** 14  # CPU/memory cost
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_DKLEN = 32
+
+# Rate limiting: max failures before authenticate() short-circuits.
+MAX_AUTH_FAILURES = 5
+AUTH_FAILURE_WINDOW_MINUTES = 15
+
+
+def _scrypt_hash(pin: str, salt: bytes) -> str:
+    digest = hashlib.scrypt(
+        pin.encode("utf-8"), salt=salt,
+        n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=_SCRYPT_DKLEN,
+    )
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
 def _hash_pin(pin: str) -> str:
+    """Hash a new PIN with a fresh per-user salt."""
+    salt = secrets.token_bytes(16)
+    return _scrypt_hash(pin, salt)
+
+
+def _legacy_hash_pin(pin: str) -> str:
+    """Reproduce the old sha256[:32] hash for migration comparisons."""
     return hashlib.sha256(f"{pin}:supertanks2026".encode()).hexdigest()[:32]
+
+
+def _verify_pin(pin: str, stored: str) -> bool:
+    """Constant-time PIN check against either legacy or scrypt hash."""
+    if stored.startswith("scrypt$"):
+        try:
+            _, salt_hex, digest_hex = stored.split("$", 2)
+            salt = bytes.fromhex(salt_hex)
+        except (ValueError, AttributeError):
+            return False
+        candidate = _scrypt_hash(pin, salt)
+        # Constant-time compare on the full stored string.
+        import hmac as _hmac
+        return _hmac.compare_digest(candidate, stored)
+    # Legacy 32-char sha256.
+    import hmac as _hmac
+    return _hmac.compare_digest(_legacy_hash_pin(pin), stored)
 
 
 # ── User CRUD ──
@@ -269,19 +331,64 @@ def delete_user(user_id: str, actor: str) -> Dict:
 
 # ── Auth ──
 
+def _is_locked_out(conn, user_id: str) -> bool:
+    """Returns True if this user has too many recent failed PIN attempts.
+
+    Old rows are pruned opportunistically so the table doesn't grow
+    unbounded. The check + prune happen in the same connection but not
+    in a transaction — racing failures within a few ms can both pass,
+    but they both still count, and the next attempt sees the cumulative
+    total. That's an acceptable approximation for rate limiting.
+    """
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(minutes=AUTH_FAILURE_WINDOW_MINUTES)).isoformat()
+    conn.execute("DELETE FROM st_auth_failures WHERE timestamp < ?", (cutoff,))
+    row = conn.execute(
+        "SELECT COUNT(*) FROM st_auth_failures WHERE user_id=? AND timestamp >= ?",
+        (user_id, cutoff),
+    ).fetchone()
+    return row and row[0] >= MAX_AUTH_FAILURES
+
+
 def authenticate(user_id: str, pin: str,
                  ttl_hours: int = DEFAULT_SESSION_TTL_HOURS) -> Optional[Dict]:
     """Authenticate user and create a session with a TTL.
 
     Returns a dict with session_id and expires_at on success, or None
-    if user is unknown or PIN is wrong.
+    if user is unknown, PIN is wrong, or the user is currently rate-
+    limited from too many recent failures.
+
+    On a successful login that used the legacy SHA-256 hash, the stored
+    hash is transparently upgraded to scrypt with a fresh salt.
     """
     conn = _get_conn()
     try:
-        row = conn.execute("SELECT pin_hash, level, name FROM st_users WHERE user_id=?", (user_id,)).fetchone()
-        if not row:
+        if _is_locked_out(conn, user_id):
+            logger.warning("[USER] auth rate-limited for %s", user_id)
+            _audit("auth_rate_limited", "system", user_id, "")
             return None
-        if row[0] != _hash_pin(pin):
+
+        row = conn.execute(
+            "SELECT pin_hash, level, name FROM st_users WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            # Unknown user — record a failure so an attacker can't probe
+            # for valid user_ids without rate limiting.
+            conn.execute(
+                "INSERT INTO st_auth_failures (user_id, timestamp) VALUES (?, ?)",
+                (user_id, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+            return None
+
+        stored_hash = row[0]
+        if not _verify_pin(pin, stored_hash):
+            conn.execute(
+                "INSERT INTO st_auth_failures (user_id, timestamp) VALUES (?, ?)",
+                (user_id, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
             return None
 
         now_dt = datetime.now(timezone.utc)
@@ -289,7 +396,18 @@ def authenticate(user_id: str, pin: str,
         expires_dt = now_dt + timedelta(hours=ttl_hours)
         expires = expires_dt.isoformat()
 
-        conn.execute("UPDATE st_users SET last_login=? WHERE user_id=?", (now, user_id))
+        # Transparent migration: legacy hash → scrypt on next successful login.
+        if not stored_hash.startswith("scrypt$"):
+            new_hash = _hash_pin(pin)
+            conn.execute("UPDATE st_users SET pin_hash=? WHERE user_id=?",
+                         (new_hash, user_id))
+            logger.info("[USER] Upgraded PIN hash to scrypt for %s", user_id)
+
+        conn.execute("UPDATE st_users SET last_login=? WHERE user_id=?",
+                     (now, user_id))
+
+        # Clear failure counter on success so this user starts clean.
+        conn.execute("DELETE FROM st_auth_failures WHERE user_id=?", (user_id,))
 
         session_id = secrets.token_hex(16)
         conn.execute("INSERT INTO st_sessions (session_id, user_id, created_at, expires_at) VALUES (?,?,?,?)",
