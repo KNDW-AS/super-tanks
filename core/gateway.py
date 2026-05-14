@@ -204,10 +204,72 @@ async def _dispatch_inner(
         resp = await tool.execute(request)
     finally:
         _gateway_active.reset(token)
+
+    # R-02: indirect prompt-injection scan on tool output. Web/file/
+    # memory content can carry attacker instructions that ride back
+    # into the LLM via the agent's next turn. We refuse to forward
+    # content that scans as a high-confidence injection.
+    resp = _scan_response_for_injection(resp, tool_name, corr_id)
+
     record_dispatch(
         correlation_id=corr_id, agent_id=agent_id, tool_name=tool_name,
         agent_role=agent_role, verdict="allowed",
         result_success=resp.success if resp else None,
         error=resp.error if resp else None,
     )
+    return resp
+
+
+def _extract_text(value) -> str:
+    """Flatten any tool result into a single string for scanning."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return ""
+    if isinstance(value, dict):
+        return " ".join(_extract_text(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return " ".join(_extract_text(v) for v in value)
+    return str(value)
+
+
+def _scan_response_for_injection(
+    resp: Optional[ToolResponse],
+    tool_name: str,
+    corr_id: str,
+) -> Optional[ToolResponse]:
+    """If the tool returned content that scans as injection, replace
+    the result with a refusal. Successful responses only — failures
+    don't carry attacker payload to filter.
+    """
+    if resp is None or not resp.success or resp.result is None:
+        return resp
+    text = _extract_text(resp.result)
+    if not text or len(text) < 8:
+        return resp
+    try:
+        from core.security.zef_injection_filter import scan_message, FilterVerdict
+    except Exception:
+        return resp
+    verdict = scan_message(text, source=f"tool_output:{tool_name}")
+    if verdict.verdict is FilterVerdict.BLOCK:
+        logger.warning(
+            "[gateway] indirect-injection BLOCKED in %s output corr=%s patterns=%s",
+            tool_name, corr_id, verdict.matched_patterns,
+        )
+        return ToolResponse(
+            success=False,
+            result=None,
+            error=(
+                "Tool output contained likely prompt-injection content "
+                "and was redacted before reaching the agent."
+            ),
+            metadata={
+                "indirect_injection": True,
+                "matched_patterns": verdict.matched_patterns,
+                "original_length": len(text),
+            },
+        )
     return resp
