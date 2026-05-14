@@ -5,7 +5,10 @@ Super Tanks Dual Mode Controller — LOCKDOWN / AUTONOMOUS toggle.
 
 Features:
 - Timed autonomy: AUTONOMOUS falls back to LOCKDOWN after timeout
-- Night mode: reduced autonomy after 23:00 + 2h inactivity
+- Night mode: reduced autonomy after 21:00 + 2h inactivity (start_hour
+  in NIGHT_MODE_CONFIG; end_hour=06:00). Only activates when system is
+  in AUTONOMOUS — flipping back to LOCKDOWN drops night-mode gating
+  along with the rest of autonomous behaviour.
 - Trust-aware GO-Gate roles
 - Persist/restore across restarts
 
