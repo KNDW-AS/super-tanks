@@ -26,7 +26,7 @@ import hashlib
 import logging
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +35,11 @@ from core.db.connection import open_db
 logger = logging.getLogger("super_tanks.user_manager")
 
 USER_DB = Path(__file__).resolve().parent.parent.parent / "data" / "users.db"
+
+# Session lifetime — 24h is the cockpit default. Long enough that William
+# doesn't get logged out mid-day, short enough that a stolen session_id
+# stops working overnight. Tunable by callers via authenticate(ttl_hours=).
+DEFAULT_SESSION_TTL_HOURS = 24
 
 LEVEL_NAMES = {5: "Full access", 4: "Near-full", 3: "Configured", 2: "Standard", 1: "Limited"}
 
@@ -237,8 +242,13 @@ def delete_user(user_id: str, actor: str) -> Dict:
 
 # ── Auth ──
 
-def authenticate(user_id: str, pin: str) -> Optional[Dict]:
-    """Authenticate user and create session."""
+def authenticate(user_id: str, pin: str,
+                 ttl_hours: int = DEFAULT_SESSION_TTL_HOURS) -> Optional[Dict]:
+    """Authenticate user and create a session with a TTL.
+
+    Returns a dict with session_id and expires_at on success, or None
+    if user is unknown or PIN is wrong.
+    """
     conn = _get_conn()
     try:
         row = conn.execute("SELECT pin_hash, level, name FROM st_users WHERE user_id=?", (user_id,)).fetchone()
@@ -247,18 +257,88 @@ def authenticate(user_id: str, pin: str) -> Optional[Dict]:
         if row[0] != _hash_pin(pin):
             return None
 
-        # Update last login
-        now = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        expires_dt = now_dt + timedelta(hours=ttl_hours)
+        expires = expires_dt.isoformat()
+
         conn.execute("UPDATE st_users SET last_login=? WHERE user_id=?", (now, user_id))
 
-        # Create session
         session_id = secrets.token_hex(16)
-        expires = datetime.now(timezone.utc).isoformat()  # TODO: proper expiry
         conn.execute("INSERT INTO st_sessions (session_id, user_id, created_at, expires_at) VALUES (?,?,?,?)",
                      (session_id, user_id, now, expires))
         conn.commit()
 
-        return {"user_id": user_id, "name": row[2], "level": row[1], "session_id": session_id}
+        return {
+            "user_id": user_id, "name": row[2], "level": row[1],
+            "session_id": session_id, "expires_at": expires,
+        }
+    finally:
+        conn.close()
+
+
+def validate_session(session_id: str) -> Optional[Dict]:
+    """Look up a session and confirm it has not expired.
+
+    Returns the same dict shape as authenticate() on success, or None
+    if the session is unknown or expired. Expired rows are deleted
+    eagerly so the row count stays bounded.
+    """
+    if not session_id:
+        return None
+    now_dt = datetime.now(timezone.utc)
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT s.user_id, s.expires_at, u.name, u.level "
+            "FROM st_sessions s JOIN st_users u ON u.user_id = s.user_id "
+            "WHERE s.session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return None
+        user_id, expires_at, name, level = row
+        try:
+            expires_dt = datetime.fromisoformat(expires_at)
+        except (TypeError, ValueError):
+            # Corrupt timestamp — fail closed and remove the row.
+            conn.execute("DELETE FROM st_sessions WHERE session_id=?", (session_id,))
+            conn.commit()
+            return None
+        if now_dt >= expires_dt:
+            conn.execute("DELETE FROM st_sessions WHERE session_id=?", (session_id,))
+            conn.commit()
+            return None
+        return {
+            "user_id": user_id, "name": name, "level": level,
+            "session_id": session_id, "expires_at": expires_at,
+        }
+    finally:
+        conn.close()
+
+
+def revoke_session(session_id: str) -> bool:
+    """Remove a session before its natural expiry (logout).
+
+    Returns True if a row was deleted, False if the session was unknown.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM st_sessions WHERE session_id=?", (session_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def purge_expired_sessions() -> int:
+    """Delete all sessions whose expires_at has passed. Returns the count."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM st_sessions WHERE expires_at <= ?", (now,))
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 

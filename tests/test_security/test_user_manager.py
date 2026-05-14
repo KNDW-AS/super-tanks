@@ -7,7 +7,7 @@ and the audit log. Each test uses the `user_db` fixture which
 points USER_DB at a per-test tmp file and re-initialises the schema.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -174,6 +174,141 @@ class TestAuthenticate:
         a = seed_admin.authenticate("admin", "0000")["session_id"]
         b = seed_admin.authenticate("admin", "0000")["session_id"]
         assert a != b
+
+    def test_session_has_future_expiry(self, seed_admin):
+        result = seed_admin.authenticate("admin", "0000")
+        expires_at = datetime.fromisoformat(result["expires_at"])
+        # Default TTL is 24h; allow a few seconds of slack for clock drift.
+        delta = expires_at - datetime.now(timezone.utc)
+        assert timedelta(hours=23, minutes=59) < delta < timedelta(hours=24, minutes=1)
+
+    def test_custom_ttl_respected(self, seed_admin):
+        result = seed_admin.authenticate("admin", "0000", ttl_hours=1)
+        expires_at = datetime.fromisoformat(result["expires_at"])
+        delta = expires_at - datetime.now(timezone.utc)
+        assert timedelta(minutes=59) < delta < timedelta(minutes=61)
+
+
+# ── Session validation ────────────────────────────────────────────────────
+
+class TestValidateSession:
+    def test_valid_session_returns_user(self, seed_admin):
+        sid = seed_admin.authenticate("admin", "0000")["session_id"]
+        result = seed_admin.validate_session(sid)
+        assert result is not None
+        assert result["user_id"] == "admin"
+        assert result["level"] == 5
+
+    def test_unknown_session_returns_none(self, seed_admin):
+        assert seed_admin.validate_session("nonexistent-id") is None
+
+    def test_empty_session_returns_none(self, seed_admin):
+        assert seed_admin.validate_session("") is None
+        assert seed_admin.validate_session(None) is None  # type: ignore[arg-type]
+
+    def test_expired_session_returns_none(self, user_db, monkeypatch):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        sid = user_db.authenticate("william", "1234", ttl_hours=1)["session_id"]
+
+        # Backdate expires_at to the past.
+        conn = user_db._get_conn()
+        try:
+            past = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+            conn.execute("UPDATE st_sessions SET expires_at=? WHERE session_id=?",
+                         (past, sid))
+            conn.commit()
+        finally:
+            conn.close()
+
+        assert user_db.validate_session(sid) is None
+
+    def test_expired_session_is_purged_on_check(self, user_db):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        sid = user_db.authenticate("william", "1234")["session_id"]
+        # Make it expired.
+        conn = user_db._get_conn()
+        try:
+            past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+            conn.execute("UPDATE st_sessions SET expires_at=? WHERE session_id=?",
+                         (past, sid))
+            conn.commit()
+        finally:
+            conn.close()
+
+        user_db.validate_session(sid)
+        # The row should be gone after the validate call.
+        conn = user_db._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT session_id FROM st_sessions WHERE session_id=?",
+                (sid,)).fetchone()
+        finally:
+            conn.close()
+        assert row is None
+
+    def test_corrupt_expires_at_is_deleted(self, user_db):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        sid = user_db.authenticate("william", "1234")["session_id"]
+        conn = user_db._get_conn()
+        try:
+            conn.execute("UPDATE st_sessions SET expires_at='not a date' WHERE session_id=?",
+                         (sid,))
+            conn.commit()
+        finally:
+            conn.close()
+        assert user_db.validate_session(sid) is None
+
+
+class TestRevokeSession:
+    def test_revoke_removes_session(self, seed_admin):
+        sid = seed_admin.authenticate("admin", "0000")["session_id"]
+        assert seed_admin.revoke_session(sid) is True
+        assert seed_admin.validate_session(sid) is None
+
+    def test_revoke_unknown_returns_false(self, seed_admin):
+        assert seed_admin.revoke_session("ghost") is False
+
+    def test_other_sessions_unaffected(self, user_db):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        a = user_db.authenticate("william", "1234")["session_id"]
+        b = user_db.authenticate("william", "1234")["session_id"]
+        user_db.revoke_session(a)
+        assert user_db.validate_session(a) is None
+        assert user_db.validate_session(b) is not None
+
+
+class TestPurgeExpiredSessions:
+    def test_removes_only_expired(self, user_db):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        live = user_db.authenticate("william", "1234")["session_id"]
+        expired = user_db.authenticate("william", "1234")["session_id"]
+        conn = user_db._get_conn()
+        try:
+            past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            conn.execute("UPDATE st_sessions SET expires_at=? WHERE session_id=?",
+                         (past, expired))
+            conn.commit()
+        finally:
+            conn.close()
+        purged = user_db.purge_expired_sessions()
+        assert purged == 1
+        assert user_db.validate_session(live) is not None
+        assert user_db.validate_session(expired) is None
+
+    def test_zero_when_nothing_expired(self, seed_admin):
+        seed_admin.authenticate("admin", "0000")
+        assert seed_admin.purge_expired_sessions() == 0
+
+
+# ── Delete cascade ────────────────────────────────────────────────────────
+
+class TestSessionCascadeOnUserDelete:
+    def test_deleting_user_revokes_their_sessions(self, seed_admin):
+        seed_admin.create_user(name="Kid", pin="1", level=1, created_by="admin")
+        sid = seed_admin.authenticate("kid", "1")["session_id"]
+        assert seed_admin.validate_session(sid) is not None
+        seed_admin.delete_user("kid", actor="admin")
+        assert seed_admin.validate_session(sid) is None
 
 
 # ── Capabilities ───────────────────────────────────────────────────────────
