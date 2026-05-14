@@ -122,6 +122,41 @@ AGENT_ALLOWLISTS: dict[str, List[str]] = {
         "memory_store_hierarchical",  # WRITE — store memory files
         "memory_delete",    # ADMIN — delete memory files
     ],
+    # ── Cody: third digital child — code-review and refactor agent ──
+    # Cody is the "is this code right?" agent. He reads memory + audit
+    # to do informed reviews, and proposes changes via shadow_store. He
+    # has NO direct write path to the working tree; every diff routes
+    # through GO-Gate and a human merge.
+    #
+    # Invariants live in core/security/cody_directives.py. The canonical
+    # allow-set is CODY_ALLOWED_TOOLS in that file. Keeping the list
+    # here mirrors the Aeris/Zeph pattern; the two MUST stay in sync —
+    # tests/test_security/test_cody_directives.py asserts equality.
+    "cody": [
+        # READ-only inspection
+        "memory_read_file",
+        "memory_list_dir",
+        "memory_hierarchy_search",
+        "hybrid_search",
+        "trace_reflect",
+        "self_inspect",
+        "status",
+        "semantic_search",
+        "file_read",
+        "calculator",
+        # Proposals only — these write into data/shadow_proposals/
+        # which is read by GO-Gate / human review, not into the
+        # live codebase.
+        "shadow_store_propose",
+        "propose_code_change",
+        # A2A so Cody can collaborate with Aeris/Zeph on triage.
+        "a2a_send",
+        "a2a_receive",
+        # Cody should NOT have: shell_exec, python_exec, code_edit,
+        # file_write, memory_delete, memory_store_hierarchical,
+        # home_assistant, notify_home, image_generate,
+        # propose_code_change_apply.
+    ],
 }
 
 

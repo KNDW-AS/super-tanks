@@ -87,6 +87,40 @@ class TestPrimaryResponder:
     def test_default_is_aeris_on_zero_matches(self):
         assert er.primary_responder("") == "aeris"
 
+    def test_cody_routing_on_code_review(self):
+        assert er.primary_responder(
+            "Please review this code and check for refactor opportunities"
+        ) == "cody"
+
+    def test_cody_wins_on_pure_code_quality(self):
+        assert er.primary_responder(
+            "We need a regression test and missing tests"
+        ) == "cody"
+
+    def test_norwegian_code_review_routes_to_cody(self):
+        assert er.primary_responder(
+            "Kan du gjere ein kodegjennomgang av denne"
+        ) == "cody"
+
+
+class TestEscalateToCody:
+    @pytest.mark.parametrize("msg", [
+        "Please refactor this function",
+        "Run mypy on this",
+        "We need a regression test for this bug",
+        "Refaktor denne metoden",
+        "Kvalitetssjekk koden",
+    ])
+    def test_code_quality_routes_to_cody(self, msg):
+        assert er.should_escalate_to_cody(msg) is True
+
+    @pytest.mark.parametrize("msg", [
+        "Tell me a bedtime story",
+        "What's the weather?",
+    ])
+    def test_non_code_does_not_route_to_cody(self, msg):
+        assert er.should_escalate_to_cody(msg) is False
+
 
 # ── get_escalation_reason ──────────────────────────────────────────────────
 
