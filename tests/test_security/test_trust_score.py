@@ -284,6 +284,28 @@ class TestTrustAuthorityGate:
         with pytest.raises(PermissionError):
             trust_score.record_event("aeris", "successful_task")
 
+    def test_apply_daily_decay_runs_under_default_no_authority(
+            self, tmp_path, monkeypatch):
+        """Regression: R-14 introduced a landmine where a scheduler
+        firing apply_daily_decay() on production defaults would crash
+        with PermissionError on the first record_event call. The
+        function must open its own _TrustAuthority window."""
+        from core.security import trust_score
+        monkeypatch.setattr(trust_score, "TRUST_DB", tmp_path / "trust.db")
+        monkeypatch.setattr(trust_score, "_initialised", False)
+        monkeypatch.setattr(trust_score, "_notify_level_change",
+                            lambda *a, **kw: None)
+        import contextvars
+        # Production default — authority is closed.
+        monkeypatch.setattr(trust_score, "_trust_writes_authorised",
+                            contextvars.ContextVar("trust_writes_authorised",
+                                                    default=False))
+        # Must not raise.
+        trust_score.apply_daily_decay()
+        # And must not have left the authority window leaked open.
+        with pytest.raises(PermissionError):
+            trust_score.record_event("aeris", "successful_task")
+
 
 class TestLevelChangeNotification:
     def test_called_on_level_drop(self, trust_db):

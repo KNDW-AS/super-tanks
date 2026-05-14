@@ -377,11 +377,16 @@ def apply_daily_decay():
     finally:
         conn.close()
 
-    for agent_id in DEFAULT_SCORES:
-        if agent_id in already_done:
-            logger.info("[TRUST] daily_decay already applied for %s today", agent_id)
-            continue
-        record_event(agent_id, "daily_decay", "Automatic daily decay")
+    # Daily decay is a scheduler-driven internal sweep, not agent-reachable
+    # — open the trust-write authority for the duration so record_event()
+    # accepts the writes. Without this wrap the scheduler would crash with
+    # PermissionError as soon as the first agent's row was processed.
+    with _TrustAuthority():
+        for agent_id in DEFAULT_SCORES:
+            if agent_id in already_done:
+                logger.info("[TRUST] daily_decay already applied for %s today", agent_id)
+                continue
+            record_event(agent_id, "daily_decay", "Automatic daily decay")
 
 
 def _notify_level_change(agent_id: str, old_level: str, new_level: str, score: float, event: str):
