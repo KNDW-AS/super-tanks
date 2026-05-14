@@ -42,8 +42,9 @@ def shadow(tmp_path, monkeypatch):
 # ── propose: classification ────────────────────────────────────────────────
 
 class TestProposeClassification:
-    def test_high_confidence_create_gets_auto_approve_window(self, shadow):
-        result = shadow.propose("zeph", "/family/preferences/lighting",
+    def test_high_confidence_create_in_own_namespace_auto_approves(self, shadow):
+        # Auto-approve is now restricted to the agent's private namespace.
+        result = shadow.propose("zeph", "/zeph/learned/lighting",
                                 "abstract", "overview",
                                 {"k": "v"}, confidence=0.9)
         assert result["status"] == "pending"
@@ -53,6 +54,17 @@ class TestProposeClassification:
         target = datetime.fromisoformat(result["auto_approve_at"])
         diff = target - datetime.now(timezone.utc)
         assert timedelta(hours=23) < diff < timedelta(hours=25)
+
+    def test_high_confidence_create_outside_namespace_requires_manual_review(self, shadow):
+        # The agent CANNOT auto-approve writes into public/family/system
+        # paths by asserting high confidence — that's the memory-poisoning
+        # attack vector the threat-model reviewer flagged. Manual review only.
+        result = shadow.propose("zeph", "/family/preferences/lighting",
+                                "abstract", "overview",
+                                {"k": "v"}, confidence=0.9)
+        assert result["status"] == "pending"
+        assert result["auto_approve_at"] is None
+        assert "Outside" in result["reason"] or "manual" in result["reason"].lower()
 
     def test_low_confidence_auto_rejected(self, shadow):
         result = shadow.propose("zeph", "/family/preferences/x",

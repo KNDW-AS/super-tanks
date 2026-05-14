@@ -116,10 +116,20 @@ def propose(
     except Exception:
         pass
 
-    # Auto-approve rules
+    # Auto-approve rules. Confidence is agent-supplied, so it cannot
+    # on its own be a permission gate — a compromised agent would
+    # simply assert confidence=0.99 to memory-poison Aeris's worldview.
+    # We keep the auto-approve window only for non-sensitive create
+    # operations on the agent's own private namespace (where the worst
+    # case is the agent corrupting its own memory). Everything else
+    # requires manual review.
     status = "pending"
     auto_approve_at = None
     reason = None
+
+    def _is_agent_private(p: str, agent: str) -> bool:
+        from core.memory.access_control import get_path_classification
+        return get_path_classification(p) == f"agent_private:{agent}"
 
     if confidence < 0.5:
         status = "auto_rejected"
@@ -130,11 +140,20 @@ def propose(
     elif operation == "update":
         status = "pending"
         reason = "Correction of existing fact — requires manual review"
-    elif operation == "create" and confidence >= 0.8:
-        # Auto-approve new entries with high confidence after 24h
+    elif (operation == "create"
+          and confidence >= 0.8
+          and _is_agent_private(path, agent_id)):
+        # Auto-approve high-confidence creates ONLY in the agent's own
+        # private namespace. The agent self-pollutes at worst; family
+        # / system memory is never auto-mutated on agent assertion.
         auto_approve_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
         status = "pending"
-        reason = f"New entry, confidence {confidence:.1f} — auto-approve in 24h"
+        reason = (f"New entry in own namespace, confidence {confidence:.1f} "
+                  f"— auto-approve in 24h")
+    else:
+        # Default: human reviews. Memory writes to public or other
+        # agents' namespaces are not auto-approved on agent assertion.
+        reason = "Outside agent's private namespace — requires manual review"
 
     conn = _get_conn()
     try:
