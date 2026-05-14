@@ -369,9 +369,10 @@ class QuarantineWatcher(FileSystemEventHandler):
 
             # Trust score penalty for failed quarantine scan
             try:
-                from core.security.trust_score import record_event
+                from core.security.trust_score import record_event, _TrustAuthority
                 agent = scan_result.issues[0].get("path", "zeph") if scan_result.issues else "zeph"
-                record_event("zeph", "quarantine_fail", f"Proposal {proposal_id} failed scan")
+                with _TrustAuthority():
+                    record_event("zeph", "quarantine_fail", f"Proposal {proposal_id} failed scan")
             except Exception:
                 pass
 

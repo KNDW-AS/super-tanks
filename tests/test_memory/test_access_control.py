@@ -63,6 +63,13 @@ def env(monkeypatch):
     fake_ts.record_event = lambda agent, event, details="": (
         calls["trust_events"].append((agent, event, details))
     )
+
+    # _TrustAuthority is a context manager wrapper — production callers
+    # now use it to authorise mutations. The fake just no-ops.
+    class _FakeAuthority:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+    fake_ts._TrustAuthority = _FakeAuthority
     monkeypatch.setitem(sys.modules, "core.security.trust_score", fake_ts)
 
     # ── Fake audit_log.log_access ──

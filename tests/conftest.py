@@ -70,5 +70,10 @@ def trust_db(tmp_path, monkeypatch):
     monkeypatch.setattr(trust_score, "_initialised", False)
     monkeypatch.setattr(trust_score, "_notify_level_change",
                         lambda *a, **kw: None)
+    # Tests directly call record_event / set_score — open the authority
+    # window for the whole test by default.
+    monkeypatch.setattr(trust_score, "_trust_writes_authorised",
+                        __import__("contextvars").ContextVar(
+                            "trust_writes_authorised", default=True))
     trust_score._init_db()
     return trust_score

@@ -238,16 +238,62 @@ class TestEventHistory:
 
 # ── Level-transition notification ──────────────────────────────────────────
 
-class TestLevelChangeNotification:
-    def test_called_on_level_drop(self, tmp_path, monkeypatch):
+class TestTrustAuthorityGate:
+    """R-14: Only authorised subsystems may mutate trust. Tool-reachable
+    code calling record_event/set_score directly is rejected."""
+
+    def test_record_event_without_authority_raises(self, tmp_path, monkeypatch):
+        # Reset the authority ContextVar to default-False (the trust_db
+        # fixture flips it to True, so we use raw monkeypatch here).
         from core.security import trust_score
         monkeypatch.setattr(trust_score, "TRUST_DB", tmp_path / "trust.db")
-        trust_score._init_db()
-        calls = []
+        monkeypatch.setattr(trust_score, "_initialised", False)
+        import contextvars
+        monkeypatch.setattr(trust_score, "_trust_writes_authorised",
+                            contextvars.ContextVar("trust_writes_authorised",
+                                                    default=False))
+        with pytest.raises(PermissionError, match="authorised context"):
+            trust_score.record_event("aeris", "successful_task")
+
+    def test_set_score_without_authority_raises(self, tmp_path, monkeypatch):
+        from core.security import trust_score
+        monkeypatch.setattr(trust_score, "TRUST_DB", tmp_path / "trust.db")
+        monkeypatch.setattr(trust_score, "_initialised", False)
+        import contextvars
+        monkeypatch.setattr(trust_score, "_trust_writes_authorised",
+                            contextvars.ContextVar("trust_writes_authorised",
+                                                    default=False))
+        with pytest.raises(PermissionError):
+            trust_score.set_score("aeris", 100.0)
+
+    def test_authority_context_manager_opens_window(self, tmp_path, monkeypatch):
+        from core.security import trust_score
+        monkeypatch.setattr(trust_score, "TRUST_DB", tmp_path / "trust.db")
+        monkeypatch.setattr(trust_score, "_initialised", False)
         monkeypatch.setattr(trust_score, "_notify_level_change",
-                            lambda *a, **kw: calls.append(a))
+                            lambda *a, **kw: None)
+        import contextvars
+        monkeypatch.setattr(trust_score, "_trust_writes_authorised",
+                            contextvars.ContextVar("trust_writes_authorised",
+                                                    default=False))
+        # Authorised: works.
+        with trust_score._TrustAuthority():
+            r = trust_score.record_event("aeris", "successful_task")
+        assert r["change"] == 1.0
+        # Outside: blocked again.
+        with pytest.raises(PermissionError):
+            trust_score.record_event("aeris", "successful_task")
+
+
+class TestLevelChangeNotification:
+    def test_called_on_level_drop(self, trust_db):
+        # trust_db fixture provides the authority context.
+        calls = []
+        import importlib
+        import contextvars
+        trust_db._notify_level_change = lambda *a, **kw: calls.append(a)
         # aeris=70 standard → tripwire → 0 probation
-        trust_score.record_event("aeris", "tripwire_access")
+        trust_db.record_event("aeris", "tripwire_access")
         assert len(calls) == 1
         agent, old, new, score, event = calls[0]
         assert agent == "aeris"
@@ -255,27 +301,19 @@ class TestLevelChangeNotification:
         assert new == "probation"
         assert event == "tripwire_access"
 
-    def test_not_called_when_level_unchanged(self, tmp_path, monkeypatch):
-        from core.security import trust_score
-        monkeypatch.setattr(trust_score, "TRUST_DB", tmp_path / "trust.db")
-        trust_score._init_db()
+    def test_not_called_when_level_unchanged(self, trust_db):
         calls = []
-        monkeypatch.setattr(trust_score, "_notify_level_change",
-                            lambda *a, **kw: calls.append(a))
+        trust_db._notify_level_change = lambda *a, **kw: calls.append(a)
         # aeris=70 standard → +1 = 71, still standard
-        trust_score.record_event("aeris", "successful_task")
+        trust_db.record_event("aeris", "successful_task")
         assert calls == []
 
-    def test_called_on_level_rise(self, tmp_path, monkeypatch):
-        from core.security import trust_score
-        monkeypatch.setattr(trust_score, "TRUST_DB", tmp_path / "trust.db")
-        trust_score._init_db()
+    def test_called_on_level_rise(self, trust_db):
         # Seed agent at 89.9 (senior), then bump to push into principal.
-        trust_score.set_score("aeris", 89.9, reason="setup")
+        trust_db.set_score("aeris", 89.9, reason="setup")
         calls = []
-        monkeypatch.setattr(trust_score, "_notify_level_change",
-                            lambda *a, **kw: calls.append(a))
-        trust_score.record_event("aeris", "successful_task")  # +1.0 → 90.9
+        trust_db._notify_level_change = lambda *a, **kw: calls.append(a)
+        trust_db.record_event("aeris", "successful_task")  # +1.0 → 90.9
         assert len(calls) == 1
         _, old, new, _, _ = calls[0]
         assert old == "senior"

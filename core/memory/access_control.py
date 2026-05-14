@@ -139,8 +139,9 @@ def is_path_accessible(
         # down we log loudly — silent swallow means a tripped honeypot
         # leaves the agent's score untouched.
         try:
-            from core.security.trust_score import record_event
-            record_event(agent_id, "tripwire_access", f"Accessed honeypot: {path}")
+            from core.security.trust_score import record_event, _TrustAuthority
+            with _TrustAuthority():
+                record_event(agent_id, "tripwire_access", f"Accessed honeypot: {path}")
         except Exception as exc:
             logger.error(
                 "[ACCESS_CONTROL] trust_score unavailable for tripwire event "

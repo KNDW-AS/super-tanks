@@ -156,6 +156,55 @@ def _save_score(agent_id: str, score: float, level: str):
         conn.close()
 
 
+# ── Internal-caller gating ──────────────────────────────────────────
+#
+# Trust-altering operations (record_event, set_score) must not be
+# callable by agent-controlled code paths. A prompt-injected Aeris
+# that reached `record_event("zeph", "successful_task")` from any tool
+# could inflate Zeph's trust until GO-Gate stopped requiring approval.
+#
+# We gate mutations on a ContextVar that only this module's internal
+# helpers and the proactive monitor / boot sequence set. Tool code
+# cannot reach in to flip it — the module is read-only from the
+# agent's perspective.
+
+import contextvars as _ctx
+
+_trust_writes_authorised: _ctx.ContextVar[bool] = _ctx.ContextVar(
+    "trust_writes_authorised", default=False,
+)
+
+
+class _TrustAuthority:
+    """Context manager that opens a window for trust-mutating calls.
+
+    Internal callers (proactive_monitor's daily decay, the GO-Gate
+    flow that records a successful approval, access_control's
+    tripwire reaction) use this to mark their intent. Agent-facing
+    code never touches it.
+    """
+
+    def __enter__(self):
+        self._token = _trust_writes_authorised.set(True)
+        return self
+
+    def __exit__(self, *exc):
+        _trust_writes_authorised.reset(self._token)
+        return False
+
+
+def _require_authority() -> None:
+    """Raise PermissionError if called outside a _TrustAuthority
+    block. Keeps the failure visible — silent denial would mask
+    bugs that ought to be wired through the authority."""
+    if not _trust_writes_authorised.get():
+        raise PermissionError(
+            "trust_score mutation called outside an authorised context. "
+            "Wrap the call in `with _TrustAuthority(): ...` from a "
+            "trusted internal subsystem."
+        )
+
+
 def get_score(agent_id: str) -> Dict:
     """Get current trust score and level."""
     conn = _get_conn()
@@ -179,12 +228,16 @@ def get_score(agent_id: str) -> Dict:
 def record_event(agent_id: str, event_type: str, details: str = "") -> Dict:
     """Record a trust event and update the score atomically.
 
+    Caller must be inside a `_TrustAuthority` window. Agent-facing
+    code paths (tools, skills, anything reachable from a prompt) are
+    locked out — only the security subsystems that genuinely need to
+    move trust may do so.
+
     The score read + clamp + write + event row all happen inside one
     `BEGIN IMMEDIATE` transaction so concurrent events on the same agent
-    can't lose deltas (previously two parallel `gogate_denied` events
-    both saw `score=50.0`, both wrote `score=45.0`, and the agent only
-    lost one of the two -5 deductions).
+    can't lose deltas.
     """
+    _require_authority()
     if event_type == "manual_adjust":
         try:
             change = float(details) if details else 0.0
@@ -250,7 +303,8 @@ def record_event(agent_id: str, event_type: str, details: str = "") -> Dict:
 
 
 def set_score(agent_id: str, new_score: float, reason: str = "Manual adjustment"):
-    """Direct score set (admin only)."""
+    """Direct score set (admin only). Requires _TrustAuthority."""
+    _require_authority()
     new_score = max(0.0, min(100.0, new_score))
     current = get_score(agent_id)
     old_score = current["score"]
