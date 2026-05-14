@@ -52,17 +52,28 @@ from core.security.aeris_response_templates import (
     all_templates as _aeris_templates,
     find_template_for as _aeris_find_template,
 )
+from core.security.cody_response_templates import (
+    all_templates as _cody_templates,
+    find_template_for as _cody_find_template,
+)
 
 
 def _all_templates() -> List[ResponseTemplate]:
     """Templates from every registered agent's registry. Order
-    matters: Aeris's templates win on overlap with Zeph's, because
-    HA-domain threats are Aeris's beat by design."""
-    return list(_aeris_templates()) + list(_zeph_templates())
+    matters: Cody's templates win on overlap (code-review is the
+    most specific lane), then Aeris (HA domain), then Zeph
+    (everything else)."""
+    return (list(_cody_templates())
+            + list(_aeris_templates())
+            + list(_zeph_templates()))
 
 
 def _find_template_for(threat: Threat):
-    """Search both registries, Aeris first."""
+    """Search all registries — Cody first (most specific), then
+    Aeris, then Zeph as the catch-all."""
+    tpl = _cody_find_template(threat)
+    if tpl is not None:
+        return tpl
     tpl = _aeris_find_template(threat)
     if tpl is not None:
         return tpl

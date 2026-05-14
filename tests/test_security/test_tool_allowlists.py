@@ -56,8 +56,9 @@ class TestIsToolAllowed:
 
 
 class TestAllowlistInvariants:
-    def test_only_aeris_and_zeph_have_entries(self):
-        assert set(tool_allowlists.AGENT_ALLOWLISTS.keys()) == {"aeris", "zeph"}
+    def test_known_agents_are_the_three_digital_children(self):
+        assert (set(tool_allowlists.AGENT_ALLOWLISTS.keys())
+                == {"aeris", "zeph", "cody"})
 
     def test_no_duplicates_within_allowlist(self):
         for agent, tools in tool_allowlists.AGENT_ALLOWLISTS.items():

@@ -36,8 +36,23 @@ class TestVoiceProfiles:
         p = voice_profiles.get_voice_profile("aeris")
         assert p.language == "en_US"
 
-    def test_list_profiles_returns_both(self, monkeypatch):
-        monkeypatch.delenv("ST_VOICE_AERIS", raising=False)
-        monkeypatch.delenv("ST_VOICE_ZEPH", raising=False)
+    def test_list_profiles_returns_all_three(self, monkeypatch):
+        for v in ("ST_VOICE_AERIS", "ST_VOICE_ZEPH", "ST_VOICE_CODY"):
+            monkeypatch.delenv(v, raising=False)
         out = voice_profiles.list_profiles()
-        assert set(out.keys()) >= {"aeris", "zeph"}
+        assert set(out.keys()) >= {"aeris", "zeph", "cody"}
+
+    def test_cody_profile_distinct_from_aeris_and_zeph(self, monkeypatch):
+        for v in ("ST_VOICE_AERIS", "ST_VOICE_ZEPH", "ST_VOICE_CODY",
+                  "ST_VOICE_LANG"):
+            monkeypatch.delenv(v, raising=False)
+        a = voice_profiles.get_voice_profile("aeris")
+        z = voice_profiles.get_voice_profile("zeph")
+        c = voice_profiles.get_voice_profile("cody")
+        # Three distinct voices.
+        assert len({a.voice_id, z.voice_id, c.voice_id}) == 3
+
+    def test_cody_env_override(self, monkeypatch):
+        monkeypatch.setenv("ST_VOICE_CODY", "custom-cody-voice")
+        assert (voice_profiles.get_voice_profile("cody").voice_id
+                == "custom-cody-voice")
