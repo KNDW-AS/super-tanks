@@ -142,15 +142,13 @@ class TestGetPathClassification:
         assert ac.get_path_classification("/family/finance/") == "sensitive"
         assert ac.get_path_classification("family/finance/") == "sensitive"
 
-    def test_prefix_match_without_path_boundary_overclassifies(self, env):
-        # FINDING: classification uses raw startswith with no trailing
-        # separator check, so "/family/finance_other" is classified as
-        # sensitive even though it's a semantically distinct path. This
-        # is fail-closed (over-restrictive, never under-restrictive), so
-        # it's safe in this direction. Documented so the next refactor
-        # is intentional about it.
+    def test_prefix_boundary_respected(self, env):
+        # Sibling paths must NOT inherit a parent's classification.
+        # /family/finance_other is semantically distinct from
+        # /family/finance and should classify as unknown.
         ac, _, _ = env
-        assert ac.get_path_classification("/family/finance_other") == "sensitive"
+        assert ac.get_path_classification("/family/finance_other") == "unknown"
+        assert ac.get_path_classification("/family/financex") == "unknown"
 
 
 # ── is_path_accessible — public paths ──────────────────────────────────────
@@ -332,8 +330,9 @@ class TestTriggerTripwireAlarm:
         assert entry["path"] == "/system/admin_keys"
         assert entry["accessible"] is False
 
-    def test_never_raises_when_all_subsystems_fail(self, monkeypatch):
-        # Every collaborator throws — function must still return cleanly.
+    def test_never_raises_when_all_subsystems_fail(self, monkeypatch, caplog):
+        # Every collaborator throws — function must still return cleanly
+        # AND must log each failure (silent swallow is a separate bug).
         for mod_name, attr, value in [
             ("core.security.super_tanks_mode", "get_mode",
              lambda: (_ for _ in ()).throw(RuntimeError("mode down"))),
@@ -358,5 +357,12 @@ class TestTriggerTripwireAlarm:
         monkeypatch.setenv("AERIS_GOGATE_TELEGRAM_TOKEN", "fake")
 
         from core.memory import access_control
+        caplog.set_level("ERROR", logger="super_tanks.memory.access_control")
         # Must not raise.
         access_control.trigger_tripwire_alarm("/william/secrets", "aeris")
+        # And EACH failed subsystem must have left a log trail so the
+        # operator can see what broke.
+        error_msgs = [r.message for r in caplog.records if r.levelname == "ERROR"]
+        assert any("LOCKDOWN" in m for m in error_msgs)
+        assert any("Telegram" in m for m in error_msgs)
+        assert any("audit log" in m for m in error_msgs)

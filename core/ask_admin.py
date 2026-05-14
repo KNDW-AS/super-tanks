@@ -273,48 +273,76 @@ class ApprovalStore:
         return None
     
     def approve_request(self, request_id: str, admin_id: str) -> bool:
-        """Approve a pending request"""
-        request = self.get_request(request_id)
-        
-        if not request:
-            logger.warning(f"[ASK_ADMIN] Approve failed: request {request_id} not found")
+        """Approve a pending request atomically.
+
+        Uses a single conditional UPDATE so two admins clicking approve/deny
+        in the same millisecond can't both pass the status check and
+        overwrite each other.
+        """
+        import sqlite3
+
+        now = time.time()
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE approval_requests "
+                "SET status=?, resolved_at=?, resolved_by=? "
+                "WHERE request_id=? AND status=? AND expires_at>?",
+                (ApprovalStatus.APPROVED.value, now, admin_id,
+                 request_id, ApprovalStatus.PENDING.value, now),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                logger.warning(
+                    f"[ASK_ADMIN] Approve failed: request {request_id} "
+                    f"not pending or already expired"
+                )
+                return False
+            logger.info(f"[ASK_ADMIN] Approved request {request_id} by {admin_id}")
+            return True
+        except sqlite3.OperationalError as e:
+            logger.error(f"[ZEF v1] approve_request SQLITE_BUSY for {request_id}: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return False
-        
-        if request.status != ApprovalStatus.PENDING:
-            logger.warning(f"[ASK_ADMIN] Approve failed: request {request_id} is {request.status.value}")
-            return False
-        
-        if request.is_expired():
-            logger.warning(f"[ASK_ADMIN] Approve failed: request {request_id} expired")
-            return False
-        
-        request.status = ApprovalStatus.APPROVED
-        request.resolved_at = time.time()
-        request.resolved_by = admin_id
-        
-        self._save_request(request)
-        logger.info(f"[ASK_ADMIN] Approved request {request_id} by {admin_id}")
-        return True
-    
+        finally:
+            conn.close()
+
     def deny_request(self, request_id: str, admin_id: str) -> bool:
-        """Deny a pending request"""
-        request = self.get_request(request_id)
-        
-        if not request:
-            logger.warning(f"[ASK_ADMIN] Deny failed: request {request_id} not found")
+        """Deny a pending request atomically (see approve_request)."""
+        import sqlite3
+
+        now = time.time()
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE approval_requests "
+                "SET status=?, resolved_at=?, resolved_by=? "
+                "WHERE request_id=? AND status=?",
+                (ApprovalStatus.DENIED.value, now, admin_id,
+                 request_id, ApprovalStatus.PENDING.value),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                logger.warning(
+                    f"[ASK_ADMIN] Deny failed: request {request_id} not pending"
+                )
+                return False
+            logger.info(f"[ASK_ADMIN] Denied request {request_id} by {admin_id}")
+            return True
+        except sqlite3.OperationalError as e:
+            logger.error(f"[ZEF v1] deny_request SQLITE_BUSY for {request_id}: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return False
-        
-        if request.status != ApprovalStatus.PENDING:
-            logger.warning(f"[ASK_ADMIN] Deny failed: request {request_id} is {request.status.value}")
-            return False
-        
-        request.status = ApprovalStatus.DENIED
-        request.resolved_at = time.time()
-        request.resolved_by = admin_id
-        
-        self._save_request(request)
-        logger.info(f"[ASK_ADMIN] Denied request {request_id} by {admin_id}")
-        return True
+        finally:
+            conn.close()
     
     def expire_old_requests(self) -> int:
         """Mark expired requests and return count. ZEF v1: BEGIN IMMEDIATE."""

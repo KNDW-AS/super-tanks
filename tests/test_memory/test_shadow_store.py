@@ -92,6 +92,9 @@ class TestSensitivePathDetection:
         "/family/routines",
         "/aeris/learned/x",
         "/random/path",
+        # Sibling paths must NOT be classified as sensitive — boundary check.
+        "/family/finances_summary",  # sibling of /family/finance
+        "/system/configuration_log",  # sibling of /system/config
     ])
     def test_not_sensitive(self, shadow, path):
         assert shadow._is_sensitive_path(path) is False

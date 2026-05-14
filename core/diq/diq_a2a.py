@@ -9,7 +9,7 @@ Implementations live in core/a2a.py — this file never changes.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -20,7 +20,7 @@ class A2AMessage:
     recipient: str                     # "aeris" or "zeph"
     message_type: str                  # "request", "response", "notify"
     payload: Dict[str, Any] = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     correlation_id: Optional[str] = None
 
 

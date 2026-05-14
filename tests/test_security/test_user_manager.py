@@ -121,6 +121,27 @@ class TestUpdateUser:
         res = user_db.update_user("ghost", actor="admin", name="x")
         assert res["success"] is False
 
+    def test_non_privileged_actor_rejected(self, user_db):
+        # Docstring: "Actor must be Level 5". Verify non-admin actors are
+        # denied — without this, a Level-1 caller could demote the admin.
+        user_db.create_user(name="Admin", pin="0000", level=5, created_by="system")
+        user_db.create_user(name="Kid", pin="1", level=1, created_by="admin")
+        res = user_db.update_user("admin", actor="kid", name="hacked")
+        assert res["success"] is False
+        assert "Level 5" in res["error"]
+        # And the field was NOT changed.
+        assert user_db.get_user("admin")["name"] == "Admin"
+
+    def test_unknown_actor_rejected(self, seed_admin):
+        res = seed_admin.update_user("admin", actor="ghost", name="x")
+        assert res["success"] is False
+
+    def test_system_bootstrap_actor_allowed(self, user_db):
+        # The synthetic 'system' actor is a bootstrap escape hatch.
+        user_db.create_user(name="Admin", pin="0000", level=5, created_by="system")
+        res = user_db.update_user("admin", actor="system", name="Boss")
+        assert res["success"] is True
+
 
 class TestDeleteUser:
     def test_cannot_delete_last_level_5(self, seed_admin):
@@ -143,6 +164,15 @@ class TestDeleteUser:
     def test_unknown_user_returns_error(self, seed_admin):
         res = seed_admin.delete_user("ghost", actor="admin")
         assert res["success"] is False
+
+    def test_non_privileged_actor_rejected(self, seed_admin):
+        seed_admin.create_user(name="Kid", pin="1", level=1, created_by="admin")
+        seed_admin.create_user(name="Target", pin="1", level=2, created_by="admin")
+        res = seed_admin.delete_user("target", actor="kid")
+        assert res["success"] is False
+        assert "Level 5" in res["error"]
+        # Target survived.
+        assert seed_admin.get_user("target") is not None
 
 
 # ── Authentication ─────────────────────────────────────────────────────────

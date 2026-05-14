@@ -284,8 +284,12 @@ def _handle_message(msg: dict) -> None:
             pending = get_pending_transactions()
             if pending:
                 tx_id = pending[0]["tx_id"]
-                commit_transaction(tx_id)
-                reply = f"✅ Eldste ventende transaksjon `{tx_id}` godkjent."
+                if commit_transaction(tx_id):
+                    reply = f"✅ Eldste ventende transaksjon `{tx_id}` godkjent."
+                else:
+                    # The "oldest pending" might have been committed by a
+                    # concurrent admin between SELECT and UPDATE.
+                    reply = f"⚠️ `{tx_id}` var allereie behandla."
             else:
                 reply = "ℹ️ Ingen ventende transaksjoner å godkjenne."
         _send_message(chat_id, reply)

@@ -185,14 +185,30 @@ def list_users() -> List[Dict]:
         conn.close()
 
 
+def _is_privileged_actor(conn, actor: str) -> bool:
+    """Internal helper: actor must be Level 5 or the synthetic 'system' bootstrap actor."""
+    if actor == "system":
+        return True
+    row = conn.execute("SELECT level FROM st_users WHERE user_id=?", (actor,)).fetchone()
+    return row is not None and row[0] == 5
+
+
 def update_user(user_id: str, actor: str, **updates) -> Dict:
-    """Update user settings. Actor must be Level 5."""
+    """Update user settings. Actor must be Level 5 (or the bootstrap 'system').
+
+    Previously the docstring promised this but no code enforced it — any
+    string for `actor` was accepted, so a Level-1 caller could demote an
+    admin.
+    """
     allowed_fields = {"level", "curfew_time", "emergency_override", "content_filter",
                       "goodnight_message", "permitted_entities", "filter_alerts",
                       "alert_content", "telegram_id", "name"}
 
     conn = _get_conn()
     try:
+        if not _is_privileged_actor(conn, actor):
+            return {"success": False, "error": "Actor must be Level 5"}
+
         existing = conn.execute("SELECT level FROM st_users WHERE user_id=?", (user_id,)).fetchone()
         if not existing:
             return {"success": False, "error": "User not found"}
@@ -217,16 +233,27 @@ def update_user(user_id: str, actor: str, **updates) -> Dict:
 
 
 def delete_user(user_id: str, actor: str) -> Dict:
-    """Delete a user. Cannot delete last Level 5 user."""
+    """Delete a user. Cannot delete last Level 5 user. Actor must be Level 5.
+
+    The level-count check + delete now run inside one BEGIN IMMEDIATE
+    transaction so two admins concurrently deleting each other can't
+    both pass the count guard and leave the system with zero L5 users.
+    """
     conn = _get_conn()
     try:
+        if not _is_privileged_actor(conn, actor):
+            return {"success": False, "error": "Actor must be Level 5"}
+
+        conn.execute("BEGIN IMMEDIATE")
         target = conn.execute("SELECT level FROM st_users WHERE user_id=?", (user_id,)).fetchone()
         if not target:
+            conn.rollback()
             return {"success": False, "error": "User not found"}
 
         if target[0] == 5:
             l5_count = conn.execute("SELECT COUNT(*) FROM st_users WHERE level=5").fetchone()[0]
             if l5_count <= 1:
+                conn.rollback()
                 return {"success": False, "error": "Cannot delete last Level 5 user"}
 
         conn.execute("DELETE FROM st_users WHERE user_id=?", (user_id,))
@@ -305,6 +332,11 @@ def validate_session(session_id: str) -> Optional[Dict]:
             conn.execute("DELETE FROM st_sessions WHERE session_id=?", (session_id,))
             conn.commit()
             return None
+        # A naive timestamp (older row, manual edit, or a tool that used
+        # utcnow().isoformat() without an offset) would crash the
+        # comparison below with TypeError. Attach UTC if missing.
+        if expires_dt.tzinfo is None:
+            expires_dt = expires_dt.replace(tzinfo=timezone.utc)
         if now_dt >= expires_dt:
             conn.execute("DELETE FROM st_sessions WHERE session_id=?", (session_id,))
             conn.commit()

@@ -72,7 +72,10 @@ def get_path_classification(path: str) -> str:
     """
     normalized = "/" + path.strip("/")
     for prefix, classification in _PATH_CLASSIFICATIONS:
-        if normalized.startswith(prefix):
+        # Require a path boundary so /family/finance does NOT match
+        # /family/finance_other. Either an exact match or the prefix
+        # followed by a "/".
+        if normalized == prefix or normalized.startswith(prefix + "/"):
             return classification
     return "unknown"
 
@@ -111,7 +114,11 @@ def is_path_accessible(
             # mode we're in we must assume nobody is watching.
             mode = "autonomous"
 
-    mode_lower = mode.value if hasattr(mode, 'value') else str(mode).lower()
+    # Always lowercase, even after .value, in case the enum value itself
+    # was stored uppercase. Previously a value like "LOCKDOWN" would
+    # compare unequal to the literal "lockdown" below and deny sensitive
+    # paths inside lockdown mode.
+    mode_lower = (mode.value if hasattr(mode, 'value') else str(mode)).lower()
 
     # ── Tripwire — always blocked, always triggers alarm ──
     if classification == "tripwire":

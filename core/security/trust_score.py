@@ -143,7 +143,14 @@ def get_score(agent_id: str) -> Dict:
 
 
 def record_event(agent_id: str, event_type: str, details: str = "") -> Dict:
-    """Record a trust event and update the score."""
+    """Record a trust event and update the score atomically.
+
+    The score read + clamp + write + event row all happen inside one
+    `BEGIN IMMEDIATE` transaction so concurrent events on the same agent
+    can't lose deltas (previously two parallel `gogate_denied` events
+    both saw `score=50.0`, both wrote `score=45.0`, and the agent only
+    lost one of the two -5 deductions).
+    """
     if event_type == "manual_adjust":
         try:
             change = float(details) if details else 0.0
@@ -156,17 +163,31 @@ def record_event(agent_id: str, event_type: str, details: str = "") -> Dict:
     else:
         change = TRUST_EVENTS[event_type]
 
-    current = get_score(agent_id)
-    score_before = current["score"]
-    score_after = max(0.0, min(100.0, score_before + change))
-    new_level = _score_to_level(score_after)
-    old_level = current["level"]
-
-    _save_score(agent_id, score_after, new_level)
-
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT score, level FROM trust_scores WHERE agent_id=?",
+            (agent_id,),
+        ).fetchone()
+        if row is None:
+            score_before = DEFAULT_SCORES.get(agent_id, 50.0)
+            old_level = _score_to_level(score_before)
+        else:
+            score_before = row[0]
+            old_level = row[1]
+
+        score_after = max(0.0, min(100.0, score_before + change))
+        new_level = _score_to_level(score_after)
+
+        conn.execute(
+            "INSERT INTO trust_scores (agent_id, score, level, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(agent_id) DO UPDATE SET score=?, level=?, updated_at=?",
+            (agent_id, score_after, new_level, now,
+             score_after, new_level, now),
+        )
         conn.execute(
             "INSERT INTO trust_events "
             "(timestamp, agent_id, event_type, score_change, score_before, score_after, details) "
@@ -249,8 +270,29 @@ def get_event_history(agent_id: str, limit: int = 50) -> List[Dict]:
 
 
 def apply_daily_decay():
-    """Run once per day. Reduces all agent scores by 0.5."""
+    """Run once per day. Reduces all agent scores by 0.5.
+
+    Idempotent — running twice on the same UTC day is a no-op. Without
+    this, DST transitions, retry-on-failure, or running cron + manual
+    invocation all multiplied the decay.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    conn = _get_conn()
+    try:
+        already_done = {
+            row[0] for row in conn.execute(
+                "SELECT agent_id FROM trust_events "
+                "WHERE event_type='daily_decay' AND date(timestamp)=?",
+                (today,),
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+
     for agent_id in DEFAULT_SCORES:
+        if agent_id in already_done:
+            logger.info("[TRUST] daily_decay already applied for %s today", agent_id)
+            continue
         record_event(agent_id, "daily_decay", "Automatic daily decay")
 
 

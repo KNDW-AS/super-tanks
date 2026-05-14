@@ -22,7 +22,7 @@ import time
 import logging
 import asyncio
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
@@ -142,7 +142,7 @@ class ZephScanner:
                 score=0.0,
                 issues=[{"severity": "error", "message": "Missing manifest.json"}],
                 scan_duration_ms=0,
-                scanned_at=datetime.utcnow().isoformat(),
+                scanned_at=datetime.now(timezone.utc).isoformat(),
                 message="Manglar manifest.json",
             )
 
@@ -204,7 +204,7 @@ class ZephScanner:
             score=score,
             issues=issues,
             scan_duration_ms=scan_duration_ms,
-            scanned_at=datetime.utcnow().isoformat(),
+            scanned_at=datetime.now(timezone.utc).isoformat(),
             message=message,
             violations=all_violations if all_violations else None,
         )

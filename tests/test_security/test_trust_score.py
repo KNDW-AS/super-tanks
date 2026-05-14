@@ -195,6 +195,18 @@ class TestDailyDecay:
         history = trust_db.get_event_history("aeris")
         assert any(e["event"] == "daily_decay" for e in history)
 
+    def test_decay_is_idempotent_within_a_day(self, trust_db):
+        # Running daily_decay twice in the same UTC day must NOT double-debit.
+        # Previously a DST transition or a retry-on-failure dropped scores
+        # by 1.0 instead of 0.5.
+        trust_db.apply_daily_decay()
+        trust_db.apply_daily_decay()
+        assert trust_db.get_score("aeris")["score"] == pytest.approx(69.5)
+        # And only one decay event recorded.
+        decay_events = [e for e in trust_db.get_event_history("aeris")
+                        if e["event"] == "daily_decay"]
+        assert len(decay_events) == 1
+
 
 # ── Event history ──────────────────────────────────────────────────────────
 

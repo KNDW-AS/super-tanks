@@ -10,7 +10,7 @@ Macro: Per-day rolling limit (protects costs)
 """
 
 import logging
-from datetime import datetime, date, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from core.db.connection import open_db
 
@@ -66,7 +66,7 @@ def record_usage(agent_id: str, tokens: int, task_id: str = "", provider: str = 
     try:
         conn.execute(
             "INSERT INTO token_usage (date, agent_id, task_id, tokens_used, provider, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            (date.today().isoformat(), agent_id, task_id, tokens, provider, now))
+            (datetime.now(timezone.utc).date().isoformat(), agent_id, task_id, tokens, provider, now))
         conn.commit()
     finally:
         conn.close()
@@ -77,7 +77,7 @@ def get_daily_usage(agent_id: str) -> int:
     try:
         row = conn.execute(
             "SELECT COALESCE(SUM(tokens_used), 0) FROM token_usage WHERE agent_id=? AND date=?",
-            (agent_id, date.today().isoformat())).fetchone()
+            (agent_id, datetime.now(timezone.utc).date().isoformat())).fetchone()
         return row[0] if row else 0
     finally:
         conn.close()
@@ -94,7 +94,7 @@ def check_budget(agent_id: str, task_id: str = "") -> dict:
         try:
             row = conn.execute(
                 "SELECT COALESCE(SUM(tokens_used), 0) FROM token_usage WHERE agent_id=? AND task_id=? AND date=?",
-                (agent_id, task_id, date.today().isoformat())).fetchone()
+                (agent_id, task_id, datetime.now(timezone.utc).date().isoformat())).fetchone()
             task_usage = row[0] if row else 0
         finally:
             conn.close()

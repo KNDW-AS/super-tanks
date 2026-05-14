@@ -317,4 +317,9 @@ def expire_old_proposals() -> int:
 
 def _is_sensitive_path(path: str) -> bool:
     normalized = "/" + path.strip("/")
-    return any(normalized.startswith(p) for p in SENSITIVE_PREFIXES)
+    # Boundary-aware: /family/finance matches but /family/finance_other
+    # does not. Plain startswith would over-classify siblings.
+    return any(
+        normalized == p or normalized.startswith(p + "/")
+        for p in SENSITIVE_PREFIXES
+    )
