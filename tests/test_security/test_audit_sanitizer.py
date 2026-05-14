@@ -78,6 +78,31 @@ class TestSanitizeText:
         assert "REDACTED" in out
 
 
+# ── Boundary cases (no false positives) ──────────────────────────────────
+
+class TestNoFalsePositives:
+    def test_short_hex_string_not_redacted(self):
+        # 39 hex chars — one below the 40-char HEX_REDACTED threshold.
+        s = "version a" + "b" * 38
+        out = sanitize(s)
+        assert "HEX_REDACTED" not in out
+
+    def test_iso_date_not_treated_as_fnummer(self):
+        # 6-digit + 5-digit numeric strings appear in version numbers
+        # and timestamps too — the FNUMMER pattern shouldn't false-
+        # positive on isolated numbers without the right shape.
+        out = sanitize("version 1.2.3 build 12345")
+        assert "FNUMMER_REDACTED" not in out
+
+    def test_plain_text_passes_unchanged(self):
+        msg = "Reminder: send the kids to school at 08:00"
+        assert sanitize(msg) == msg
+
+    def test_norwegian_text_passes_unchanged(self):
+        msg = "Hei William, kva vil du gjere i kveld?"
+        assert sanitize(msg) == msg
+
+
 # ── sanitize_dict() recursion ──────────────────────────────────────────────
 
 class TestSanitizeDict:
