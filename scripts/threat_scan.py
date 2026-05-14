@@ -78,6 +78,12 @@ def main(argv=None) -> int:
         "--skip-monitor", action="store_true",
         help="Skip the active local monitor.",
     )
+    parser.add_argument(
+        "--zeph", action="store_true",
+        help="Run Zeph triage on every new threat after the scan. Auto-acts "
+             "on pre-approved templates, proposes the rest. Outputs a "
+             "Norwegian brief in addition to the raw digest.",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -85,7 +91,8 @@ def main(argv=None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    digest = {"intel": None, "monitor": None}
+    digest = {"intel": None, "monitor": None, "zeph": None}
+    new_threats: list = []
 
     if not args.skip_intel:
         from core.security import threat_intel
@@ -93,6 +100,7 @@ def main(argv=None) -> int:
         _build_default_mitigators()
         scan = threat_intel.scan_all()
         digest["intel"] = scan.to_dict()
+        new_threats.extend(scan.new_threats)
 
     if not args.skip_monitor:
         from core.security import threat_monitor
@@ -103,11 +111,46 @@ def main(argv=None) -> int:
             "actions_taken": report.actions_taken,
             "errors": report.errors,
         }
+        # Hand the monitor's emitted Threats to the triage layer too;
+        # otherwise --zeph would only see intel-side findings.
+        new_threats.extend(report.emitted_threats)
+
+    if args.zeph and new_threats:
+        from core.security import threat_brief
+        brief = threat_brief.triage(new_threats)
+        digest["zeph"] = {
+            "decisions": [{
+                "verdict": d.verdict.value,
+                "template": d.template_name,
+                "rationale": d.rationale,
+                "action_note": d.action_note,
+                "sanitised": d.sanitised,
+                "fingerprint": d.threat.fingerprint,
+                "source": d.threat.source,
+            } for d in brief.decisions],
+            "actions_taken": brief.actions_taken,
+            "proposals": brief.proposals,
+            "escalations": brief.escalations,
+            "errors": brief.errors,
+        }
 
     if args.json:
         print(json.dumps(digest, indent=2, sort_keys=True))
     else:
         print(_format_digest(digest))
+        if digest["zeph"] is not None:
+            from core.security.threat_brief import (
+                BriefReport, format_brief, TriageDecision,
+            )
+            # Re-hydrate a BriefReport for the formatter.
+            r = BriefReport(
+                actions_taken=digest["zeph"]["actions_taken"],
+                proposals=digest["zeph"]["proposals"],
+                escalations=digest["zeph"]["escalations"],
+                errors=digest["zeph"]["errors"],
+            )
+            print()
+            print(format_brief(r))
     return 0
 
 

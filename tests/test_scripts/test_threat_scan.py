@@ -68,6 +68,7 @@ def cli_env(monkeypatch):
         findings = ["f1"]
         actions_taken = ["a1"]
         errors: list = []
+        emitted_threats: list = []
 
     monkeypatch.setattr(real_tm, "scan_once",
                         lambda: (monitor_calls.append("scan_once")
@@ -111,3 +112,66 @@ class TestCli:
         data = json.loads(out)
         assert "intel" in data and "monitor" in data
         assert data["monitor"]["findings"] == ["f1"]
+
+    def test_zeph_flag_runs_triage_when_new_threats(self, cli_env, capsys,
+                                                    monkeypatch):
+        from core.security import threat_intel as real_intel
+        from core.security.threat_intel import Threat
+
+        # Make scan_all return one new threat so --zeph has something
+        # to triage.
+        sample = Threat(source="osv", fingerprint="CVE-X",
+                        severity="LOW", summary="ok")
+
+        class _R:
+            sources_run = 1
+            threats_seen = 1
+            new_threats = [sample]
+            mitigation_log: list = []
+            errors: list = []
+
+            def to_dict(self):
+                return {"sources_run": 1, "threats_seen": 1,
+                        "new_threats": [{"source": sample.source,
+                                         "fingerprint": sample.fingerprint,
+                                         "severity": sample.severity,
+                                         "summary": sample.summary,
+                                         "details": {},
+                                         "discovered_at": "now"}],
+                        "mitigation_log": [], "errors": []}
+        monkeypatch.setattr(real_intel, "scan_all", lambda: _R())
+
+        # Stub triage so we don't touch the real DB.
+        from core.security import threat_brief as real_brief
+        from core.security.threat_brief import (
+            BriefReport, TriageDecision, TriageVerdict,
+        )
+        called = []
+
+        def _triage(threats):
+            called.append([t.fingerprint for t in threats])
+            return BriefReport(
+                decisions=[TriageDecision(
+                    threat=threats[0],
+                    verdict=TriageVerdict.AUTO_ACT,
+                    template_name="acknowledge_low",
+                    rationale="LOW", action_note="acknowledged (LOW)")],
+                actions_taken=["[acknowledge_low] LOW osv/CVE-X — acknowledged (LOW)"],
+            )
+        monkeypatch.setattr(real_brief, "triage", _triage)
+
+        rc = cli.main(["--zeph"])
+        assert rc == 0
+        assert called == [["CVE-X"]]
+        out = capsys.readouterr().out
+        assert "Zeph triage-rapport" in out
+        assert "Auto-handla" in out
+
+    def test_zeph_flag_skips_triage_when_no_new_threats(self, cli_env,
+                                                        capsys):
+        # Default cli_env fixture's scan_all returns empty new_threats.
+        rc = cli.main(["--zeph"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # No Zeph block in the output because we had nothing to triage.
+        assert "Zeph triage-rapport" not in out

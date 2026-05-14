@@ -69,11 +69,13 @@ TRUST_PENALTY_ZEF_BURST = 5.0
 @dataclass
 class MonitorReport:
     """What scan_once() found and did. Returned to the CLI for
-    Telegram digest assembly."""
+    Telegram digest assembly + the Zeph triage layer (which needs
+    the actual Threat objects, not just the human-readable findings)."""
     window_minutes: int = WINDOW_MINUTES
     findings: List[str] = field(default_factory=list)
     actions_taken: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    emitted_threats: List["Threat"] = field(default_factory=list)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -91,18 +93,22 @@ def _bucket(now: Optional[datetime] = None) -> str:
 
 
 def _emit_threat(*, fingerprint: str, severity: str, summary: str,
-                 details: dict) -> None:
-    """Insert a Threat for this pattern into the central store. The
+                 details: dict, report: "MonitorReport") -> None:
+    """Insert a Threat for this pattern into the central store and
+    record it on the report for the triage layer to pick up. The
     chain-HMAC, dedup, and digest plumbing is shared with the
     proactive intel sources."""
     from core.security.threat_intel import Threat, record_threat
-    record_threat(Threat(
+    threat = Threat(
         source="threat_monitor",
         fingerprint=fingerprint,
         severity=severity,
         summary=summary,
         details=details,
-    ))
+    )
+    inserted = record_threat(threat)
+    if inserted:
+        report.emitted_threats.append(threat)
 
 
 # ── Pattern detectors ──────────────────────────────────────────────────────
@@ -142,6 +148,7 @@ def _detect_identity_burst(report: MonitorReport, now: datetime) -> None:
             summary=finding,
             details={"agent": agent, "count": n,
                      "window_minutes": WINDOW_MINUTES},
+            report=report,
         )
 
 
@@ -180,6 +187,7 @@ def _detect_tripwire_burst(report: MonitorReport, now: datetime) -> None:
         summary=finding,
         details={"counts": dict(counts), "total": total,
                  "window_minutes": WINDOW_MINUTES},
+        report=report,
     )
 
     # Response: LOCKDOWN.
@@ -225,6 +233,7 @@ def _detect_zef_burst(report: MonitorReport, now: datetime) -> None:
             summary=finding,
             details={"agent": agent, "count": n,
                      "window_minutes": WINDOW_MINUTES},
+            report=report,
         )
         # Response: trust drop. Goes through the _TrustAuthority gate
         # because this monitor is a legitimate internal subsystem.
@@ -277,6 +286,7 @@ def _detect_chain_tampering(report: MonitorReport, now: datetime) -> None:
             severity="CRITICAL",
             summary=finding,
             details={"table": table, "tampered_row_id": tampered_id},
+            report=report,
         )
         # Response: SAFE_MODE.
         try:
