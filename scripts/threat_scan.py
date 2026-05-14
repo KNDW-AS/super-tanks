@@ -37,8 +37,10 @@ def _build_default_sources() -> None:
     from core.security import threat_intel
     from core.security.intel_sources.osv import OSVDepSource
     from core.security.intel_sources.zef_drift import ZEFDriftSource
+    from core.security.intel_sources.ha_health import HAHealthSource
     threat_intel.register_source(OSVDepSource())
     threat_intel.register_source(ZEFDriftSource())
+    threat_intel.register_source(HAHealthSource())
 
 
 def _build_default_mitigators() -> None:

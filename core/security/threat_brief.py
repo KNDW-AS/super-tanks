@@ -45,8 +45,28 @@ from typing import Callable, List, Optional
 
 from core.security.threat_intel import Threat
 from core.security.zeph_response_templates import (
-    ResponseTemplate, all_templates, find_template_for,
+    ResponseTemplate, all_templates as _zeph_templates,
+    find_template_for as _zeph_find_template,
 )
+from core.security.aeris_response_templates import (
+    all_templates as _aeris_templates,
+    find_template_for as _aeris_find_template,
+)
+
+
+def _all_templates() -> List[ResponseTemplate]:
+    """Templates from every registered agent's registry. Order
+    matters: Aeris's templates win on overlap with Zeph's, because
+    HA-domain threats are Aeris's beat by design."""
+    return list(_aeris_templates()) + list(_zeph_templates())
+
+
+def _find_template_for(threat: Threat):
+    """Search both registries, Aeris first."""
+    tpl = _aeris_find_template(threat)
+    if tpl is not None:
+        return tpl
+    return _zeph_find_template(threat)
 
 logger = logging.getLogger("super_tanks.threat_brief")
 
@@ -144,7 +164,7 @@ def _default_engine(threat: Threat) -> TriageDecision:
             threat=threat, verdict=TriageVerdict.AUTO_ACKNOWLEDGE,
             rationale="LOW severity, dedup recorded",
         )
-    tpl = find_template_for(threat)
+    tpl = _find_template_for(threat)
     if tpl is not None:
         return TriageDecision(
             threat=threat, verdict=TriageVerdict.AUTO_ACT,
@@ -242,7 +262,7 @@ def triage(threats: List[Threat]) -> BriefReport:
 def _resolve_template(name: Optional[str]) -> Optional[ResponseTemplate]:
     if not name:
         return None
-    for tpl in all_templates():
+    for tpl in _all_templates():
         if tpl.name == name:
             return tpl
     return None

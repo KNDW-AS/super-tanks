@@ -243,3 +243,41 @@ class TestFormatBrief:
         assert "Auto-handla" in out
         assert "Foreslår" in out
         assert "Eskalert" in out
+
+
+class TestMultiRegistryRouting:
+    """Verify the triage engine consults both Aeris and Zeph
+    response template registries."""
+
+    def test_aeris_ha_template_wins_over_zeph(self, store, monkeypatch):
+        # Stub ApprovalStore so the clear_stale template can execute
+        # without touching real state.
+        import sys
+        import types
+        fake = types.ModuleType("core.ask_admin")
+
+        class _Store:
+            def expire_old_requests(self): return 2
+        fake.ApprovalStore = _Store
+        monkeypatch.setitem(sys.modules, "core.ask_admin", fake)
+
+        t = Threat(source="ha_health", fingerprint="H1-x",
+                   severity="HIGH", summary="stale pending",
+                   details={"kind": "ha_pending_stale"})
+        r = triage([t])
+        d = r.decisions[0]
+        assert d.verdict is TriageVerdict.AUTO_ACT
+        assert d.template_name == "clear_stale_ha_approvals"
+        assert "expired" in d.action_note
+
+    def test_zeph_template_still_wins_when_no_aeris_match(self, store,
+                                                          monkeypatch):
+        # OSV CVE on unimported package — falls through to Zeph's
+        # mark_dependency_not_imported.
+        t = Threat(source="osv", fingerprint="CVE-X", severity="HIGH",
+                   summary="x",
+                   details={"package": "totally_made_up_xyz",
+                            "fixed_versions": []})
+        r = triage([t])
+        d = r.decisions[0]
+        assert d.template_name == "mark_dependency_not_imported"
