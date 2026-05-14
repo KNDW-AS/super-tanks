@@ -63,6 +63,19 @@ _DEFAULT_PROFILES: Dict[str, VoiceProfile] = {
         language="nb_NO",
         description="Calm Norwegian male — Zeph's technical voice",
     ),
+    "cody": VoiceProfile(
+        agent_id="cody",
+        # Cody is the code-review agent. Defaulting to English here
+        # because most code-review vocabulary (function, return,
+        # commit, refactor) is English anyway, and a different
+        # language makes Cody trivially distinguishable from Aeris
+        # and Zeph by ear — important so children and guests can
+        # tell who's talking. The operator can switch to a Norwegian
+        # model via ST_VOICE_CODY / ST_VOICE_LANG if preferred.
+        voice_id="en_US-libritts_r-medium",
+        language="en_US",
+        description="Neutral English speaker — Cody's code-review voice",
+    ),
 }
 
 

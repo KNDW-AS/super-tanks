@@ -88,6 +88,30 @@ _AERIS_TO_ZEPH_RAW = [
     "logg", "oppdatering", "installasjon", "kompilering",
 ]
 
+# Keywords / patterns that route to Cody — the code-review and
+# refactor agent. Cody's beat is "is this code right?" — diffs, PR
+# reviews, refactoring, missing tests, code quality. Some words
+# overlap with Zeph's tech list (git, commit) but the intent differs:
+# Zeph debugs running systems, Cody reviews proposed changes.
+_TO_CODY_RAW = [
+    # English — code quality / review / refactor
+    "refactor", "refactoring", "review code", "code review",
+    "lint", "mypy", "type check", "type checking", "type hints",
+    "test coverage", "missing test", "missing tests",
+    "regression test", "write a test", "write tests",
+    "code style", "naming convention", "dry principle",
+    "duplication", "duplicate code", "cyclomatic complexity",
+    "code smell", "anti-pattern", "design pattern",
+    "abstraction", "architecture review", "pull request review",
+    "PR review", "PR feedback", "rebase", "squash",
+    # Norwegian
+    "refaktor", "refaktorer", "kode-review", "kode review",
+    "kodegjennomgang", "kvalitetssjekk", "skrive ein test",
+    "skriv ein test", "skrive testar", "skriv testar",
+    "kode-stil", "kodestil", "namnekonvensjon",
+    "duplikat", "duplisering",
+]
+
 # Keywords / patterns where Zeph should defer to Aeris
 _ZEPH_TO_AERIS_RAW = [
     # English — emotions, family, creativity, daily life
@@ -129,6 +153,7 @@ SHARED_RESPONSIBILITY = [
 # Compiled trigger lists
 AERIS_TO_ZEPH_TRIGGERS = _compile(_AERIS_TO_ZEPH_RAW)
 ZEPH_TO_AERIS_TRIGGERS = _compile(_ZEPH_TO_AERIS_RAW)
+TO_CODY_TRIGGERS = _compile(_TO_CODY_RAW)
 
 
 # ---------------------------------------------------------------------------
@@ -151,26 +176,43 @@ def should_escalate_to_aeris(message: str) -> bool:
     return any(pat.search(message) for pat, _ in ZEPH_TO_AERIS_TRIGGERS)
 
 
+def should_escalate_to_cody(message: str) -> bool:
+    """
+    Return True if the message contains patterns that indicate Cody
+    should handle it (code review, refactor, missing tests, PR
+    feedback, etc.).
+    """
+    return any(pat.search(message) for pat, _ in TO_CODY_TRIGGERS)
+
+
 def primary_responder(message: str) -> str:
     """
     Determine which agent should be the primary responder for a message.
 
     Returns:
-        "aeris" or "zeph"
+        "aeris", "zeph", or "cody"
 
     Logic:
         1. Count matching triggers for each agent.
-        2. The agent with more matches wins.
-        3. On a tie or zero matches, default to "aeris" (she is the
-           family-facing frontline agent).
+        2. The agent with the most matches wins.
+        3. Cody → Zeph → Aeris on ties (most-specific first); Aeris
+           remains the default when no triggers fire, because she is
+           the family-facing frontline agent.
     """
     zeph_score = sum(1 for pat, _ in AERIS_TO_ZEPH_TRIGGERS if pat.search(message))
     aeris_score = sum(1 for pat, _ in ZEPH_TO_AERIS_TRIGGERS if pat.search(message))
+    cody_score = sum(1 for pat, _ in TO_CODY_TRIGGERS if pat.search(message))
 
-    if zeph_score > aeris_score:
+    # Pick the strict maximum first. On any tie the most-specific
+    # responder wins: Cody (code review) is more specialised than
+    # Zeph (tech), which is more specialised than Aeris (general).
+    best = max(cody_score, zeph_score, aeris_score)
+    if best == 0:
+        return "aeris"
+    if cody_score == best:
+        return "cody"
+    if zeph_score == best:
         return "zeph"
-    # Aeris is the default — she handles general conversation and
-    # anything that does not clearly belong to Zeph's domain.
     return "aeris"
 
 
