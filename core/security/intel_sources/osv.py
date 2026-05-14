@@ -101,6 +101,36 @@ def _osv_severity_to_threat(osv_sev: Optional[List[Dict[str, Any]]]) -> str:
     return SEVERITY_LOW
 
 
+def _extract_fixed_versions(detail: Dict[str, Any], package: str) -> List[str]:
+    """Pull `fixed` versions for `package` out of an OSV detail blob.
+
+    OSV puts fixes inside `affected[*].ranges[*].events`, with each
+    event being either {"introduced": "x"} or {"fixed": "x"}. Reading
+    the structure correctly is what gives Zeph a deterministic upgrade
+    target instead of a guess.
+    """
+    norm = package.replace("_", "-").lower()
+    out: List[str] = []
+    for aff in (detail.get("affected") or []):
+        if not isinstance(aff, dict):
+            continue
+        pkg = (aff.get("package") or {}).get("name", "")
+        if pkg.replace("_", "-").lower() != norm:
+            continue
+        for r in (aff.get("ranges") or []):
+            for ev in (r.get("events") or []):
+                fixed = ev.get("fixed") if isinstance(ev, dict) else None
+                if fixed:
+                    out.append(str(fixed))
+    # Dedup, preserve order.
+    seen, uniq = set(), []
+    for v in out:
+        if v not in seen:
+            seen.add(v)
+            uniq.append(v)
+    return uniq
+
+
 class _OSVHTTP:
     """Indirection point for the network call so tests can stub it
     without monkeypatching urllib globally."""
@@ -181,6 +211,7 @@ class OSVDepSource(IntelSource):
                 summary = ""
                 severity = SEVERITY_MEDIUM
                 aliases: List[str] = []
+                fixed_versions: List[str] = []
                 try:
                     detail = self._http.get_vuln(vuln_id)
                     if detail:
@@ -189,6 +220,7 @@ class OSVDepSource(IntelSource):
                                    or "")
                         severity = _osv_severity_to_threat(detail.get("severity"))
                         aliases = list(detail.get("aliases") or [])
+                        fixed_versions = _extract_fixed_versions(detail, name)
                 except Exception as exc:
                     logger.warning("[OSV] enrich %s failed: %s", vuln_id, exc)
 
@@ -203,6 +235,7 @@ class OSVDepSource(IntelSource):
                         "version": version,
                         "vuln_id": vuln_id,
                         "aliases": aliases,
+                        "fixed_versions": fixed_versions,
                     },
                 ))
         return threats

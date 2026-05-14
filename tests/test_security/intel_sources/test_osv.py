@@ -78,6 +78,13 @@ class TestFetch:
                     "summary": "RCE in requests",
                     "severity": [{"score": "9.8"}],
                     "aliases": ["GHSA-xxx-yyyy-zzzz"],
+                    "affected": [{
+                        "package": {"name": "requests", "ecosystem": "PyPI"},
+                        "ranges": [{"events": [
+                            {"introduced": "0"},
+                            {"fixed": "2.32.5"},
+                        ]}],
+                    }],
                 },
             },
         )
@@ -91,6 +98,19 @@ class TestFetch:
         assert t.details["package"] == "requests"
         assert t.details["version"] == "2.30.0"
         assert t.details["aliases"] == ["GHSA-xxx-yyyy-zzzz"]
+        assert t.details["fixed_versions"] == ["2.32.5"]
+
+    def test_no_affected_block_means_empty_fixed_versions(self):
+        http = _FakeHTTP(
+            batch_payload={"results": [
+                {"vulns": [{"id": "CVE-2025-2"}]},
+                {"vulns": []},
+            ]},
+            vuln_details={"CVE-2025-2": {"summary": "x"}},
+        )
+        s = OSVDepSource(http=http, packages_provider=_packages)
+        threats = s.fetch()
+        assert threats[0].details["fixed_versions"] == []
 
     def test_enrich_failure_still_emits_threat(self):
         class FlakyHTTP(_FakeHTTP):

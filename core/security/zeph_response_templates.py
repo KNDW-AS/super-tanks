@@ -131,6 +131,85 @@ def _applies_unimported_dep(threat: Threat) -> bool:
     return threat.source == "osv"
 
 
+def _t_propose_dep_upgrade(threat: Threat) -> str:
+    """OSV CVE for an imported package WITH a known fixed version.
+    Zeph writes a ready-to-apply fix proposal to data/proposed_fixes/
+    that the operator can either review-and-apply manually or, with
+    ST_ZEPH_AUTO_APPLY_DEPS=1, Zeph applies himself after running the
+    post-upgrade verification step.
+
+    Conservative defaults:
+      - only writes the proposal; never modifies pip / requirements
+        directly unless the env var is set
+      - chooses the LOWEST advertised fixed version (smallest jump)
+      - declines if the package is unpinned or already at the target
+    """
+    if threat.source != "osv":
+        return ""
+    pkg = threat.details.get("package")
+    fixed_versions = threat.details.get("fixed_versions") or []
+    if not pkg or not fixed_versions:
+        return ""
+    # Pick the smallest version bump available (first in OSV order is
+    # usually the patch release; more sophisticated PEP-440 sorting can
+    # come later).
+    target = str(fixed_versions[0])
+
+    try:
+        from core.security import fix_proposals
+    except Exception as exc:
+        raise RuntimeError(f"fix_proposals unavailable: {exc}")
+
+    proposal = fix_proposals.propose_dep_upgrade(
+        threat_source=threat.source,
+        threat_fingerprint=threat.fingerprint,
+        package=pkg,
+        target_version=target,
+        reason=(f"{threat.fingerprint} ({threat.severity}): "
+                f"{threat.summary[:200]}"),
+    )
+    if proposal is None:
+        return ""  # not pinned or already at target → engine falls to PROPOSE
+
+    if fix_proposals.auto_apply_enabled():
+        # Operator opted in. We attempt the apply right here. The apply
+        # path is itself wrapped — failures roll back and mark the
+        # proposal failed; Zeph still escalates via the brief.
+        try:
+            from core.security import dep_upgrade_apply
+            ok, log = dep_upgrade_apply.apply_proposal(proposal,
+                                                       by="zeph_auto")
+        except Exception as exc:
+            return (f"proposal {proposal.id} written; auto-apply attempted "
+                    f"but the apply pipeline raised: {exc}")
+        if ok:
+            return (f"proposal {proposal.id} applied: {pkg} "
+                    f"{proposal.current_version}→{target} (auto-apply)")
+        return (f"proposal {proposal.id} written; auto-apply FAILED "
+                f"and rolled back: {log[:200]}")
+
+    return (f"proposal {proposal.id} written: {pkg} "
+            f"{proposal.current_version}→{target}. "
+            f"Run: python -m scripts.apply_proposed_fix --apply "
+            f"{proposal.id}")
+
+
+def _applies_dep_upgrade(threat: Threat) -> bool:
+    if threat.source != "osv":
+        return False
+    if threat.severity not in ("HIGH", "CRITICAL"):
+        return False
+    if not (threat.details.get("fixed_versions") or []):
+        return False
+    pkg = threat.details.get("package")
+    if not pkg:
+        return False
+    # Only when the package IS imported (otherwise mark_not_imported wins).
+    import sys
+    return (pkg in sys.modules
+            or pkg.replace("-", "_") in sys.modules)
+
+
 # ── Registry ───────────────────────────────────────────────────────────────
 
 _TEMPLATES: List[ResponseTemplate] = [
@@ -146,6 +225,15 @@ _TEMPLATES: List[ResponseTemplate] = [
                      "block_rate/warn_rate-drift"),
         applies_to=_applies_minor_zef_drift,
         execute=_t_rebaseline_minor_zef_drift,
+    ),
+    # Order: dep_upgrade FIRST so an importable+upgradable package
+    # gets a real fix proposal instead of being marked not-imported.
+    ResponseTemplate(
+        name="propose_dep_upgrade",
+        description=("Generér klar-å-køyre dep-upgrade-proposal for "
+                     "HIGH/CRITICAL OSV CVE i importert pakke"),
+        applies_to=_applies_dep_upgrade,
+        execute=_t_propose_dep_upgrade,
     ),
     ResponseTemplate(
         name="mark_dependency_not_imported",
