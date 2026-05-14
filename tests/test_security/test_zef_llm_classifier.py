@@ -22,13 +22,15 @@ class TestChannelRouting:
         ("webhook:external", True),
         ("ha_voice:kitchen", True),
         ("http:william", True),
+        # A2A is now treated as high-risk: agent-to-agent is the
+        # primary route a compromised agent uses to attack the other.
+        ("a2a:aeris", True),
     ])
     def test_high_risk_channels(self, source, expected):
         assert clf.is_high_risk_channel(source) is expected
 
     @pytest.mark.parametrize("source", [
         "telegram:ADMIN_CHAT_ID",
-        "a2a:aeris",
         "cockpit:admin",
     ])
     def test_trusted_channels_skip_classifier(self, source):

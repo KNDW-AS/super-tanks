@@ -1,15 +1,20 @@
 """
 Tests for core/security/aeris_security_directives.py.
 
-The module exports a single string constant. These tests verify the
-critical clauses are present so a careless edit can't silently strip
-them. The directives are appended to Aeris's system prompt and are
-the last line of defence against information-disclosure prompts.
+The module exports the directive text plus AERIS_FORBIDDEN_TOOLS, the
+single source of truth for what Aeris must never invoke. These tests
+verify the critical clauses are present, the forbidden-tool set has
+the expected entries, and the directive stays in sync with the real
+per-agent allowlist (otherwise the prompt and the enforcement layer
+silently disagree).
 """
 
 import pytest
 
-from core.security.aeris_security_directives import AERIS_SECURITY_DIRECTIVES
+from core.security.aeris_security_directives import (
+    AERIS_SECURITY_DIRECTIVES,
+    AERIS_FORBIDDEN_TOOLS,
+)
 
 
 class TestDirectivesContent:
@@ -52,3 +57,25 @@ class TestDirectivesContent:
         # When Aeris finds a gap, she should escalate to William or Zeph.
         assert "William" in AERIS_SECURITY_DIRECTIVES
         assert "Zeph" in AERIS_SECURITY_DIRECTIVES
+
+
+# ── Single-source-of-truth: forbidden set + allowlist consistency ──────
+
+class TestForbiddenToolsConsistency:
+    def test_forbidden_set_includes_dangerous_tools(self):
+        for t in ("propose_code_change", "file_write", "code_edit",
+                  "shell_exec", "python_exec"):
+            assert t in AERIS_FORBIDDEN_TOOLS
+
+    def test_allowlist_disjoint_from_forbidden(self):
+        # If anyone ever adds one of the forbidden tools to Aeris's
+        # allowlist, the module-level import would raise; this test
+        # makes the contract explicit.
+        from core.security.tool_allowlists import AGENT_ALLOWLISTS
+        aeris_allowed = set(AGENT_ALLOWLISTS.get("aeris", []))
+        assert aeris_allowed.isdisjoint(AERIS_FORBIDDEN_TOOLS)
+
+    def test_directive_text_lists_each_forbidden_tool(self):
+        for t in AERIS_FORBIDDEN_TOOLS:
+            assert t in AERIS_SECURITY_DIRECTIVES, \
+                f"directive text doesn't mention forbidden tool {t!r}"
