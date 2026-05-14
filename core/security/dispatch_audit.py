@@ -93,9 +93,16 @@ def _init_db() -> None:
                 agent_role      TEXT    NOT NULL,
                 verdict         TEXT    NOT NULL,
                 result_success  INTEGER,
-                error           TEXT
+                error           TEXT,
+                hmac            TEXT    NOT NULL DEFAULT ''
             )
         """)
+        # Migration for existing DBs.
+        try:
+            conn.execute("SELECT hmac FROM dispatch_log LIMIT 0")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE dispatch_log ADD COLUMN hmac TEXT NOT NULL DEFAULT ''")
+            logger.info("[DISPATCH_AUDIT] Migrated: added hmac column")
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_dispatch_corr
             ON dispatch_log (correlation_id)
@@ -134,23 +141,48 @@ def record_dispatch(
                             fail-closed deny
     """
     now = datetime.now(timezone.utc).isoformat()
+    row = {
+        "timestamp": now,
+        "correlation_id": correlation_id,
+        "agent_id": agent_id,
+        "tool_name": tool_name,
+        "agent_role": agent_role,
+        "verdict": verdict,
+        "result_success": (None if result_success is None
+                           else (1 if result_success else 0)),
+        "error": error,
+    }
     conn = None
     try:
         conn = _open()
-        conn.execute(
-            "INSERT INTO dispatch_log "
-            "(timestamp, correlation_id, agent_id, tool_name, "
-            "agent_role, verdict, result_success, error) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (now, correlation_id, agent_id, tool_name, agent_role,
-             verdict,
-             None if result_success is None else (1 if result_success else 0),
-             error),
-        )
-        conn.commit()
+        from core.security.audit_chain import append_chained
+        append_chained(conn, "dispatch_log", row)
     except sqlite3.Error as exc:
         logger.error("[DISPATCH_AUDIT] Failed to record dispatch %s: %s",
                      correlation_id, exc)
+    except Exception as exc:
+        logger.error("[DISPATCH_AUDIT] Chain write failed for %s: %s",
+                     correlation_id, exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def verify_dispatch_chain() -> Optional[int]:
+    """Returns None if dispatch_log chain is intact, else the id of
+    the first tampered row."""
+    conn = None
+    try:
+        conn = _open()
+        from core.security.audit_chain import verify_chain
+        return verify_chain(
+            conn, "dispatch_log",
+            ["timestamp", "correlation_id", "agent_id", "tool_name",
+             "agent_role", "verdict", "result_success", "error"],
+        )
     finally:
         if conn is not None:
             try:

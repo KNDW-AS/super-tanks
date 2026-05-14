@@ -35,7 +35,12 @@ _initialised: bool = False
 
 
 def _ensure_schema() -> None:
-    """Create the table + indexes on the first call (idempotent)."""
+    """Create the table + indexes on the first call (idempotent).
+
+    Schema includes an `hmac` column for tamper-evident chaining
+    (R-12). Each row's hmac is HMAC(key, prev_row_hmac || row_bytes);
+    rewriting history requires the runtime HMAC key.
+    """
     global _initialised
     if _initialised:
         return
@@ -59,9 +64,24 @@ def _ensure_schema() -> None:
                     mode            TEXT    NOT NULL DEFAULT 'lockdown',
                     accessible      INTEGER NOT NULL DEFAULT 1,
                     conversation_id TEXT    NOT NULL DEFAULT '',
-                    trajectory      TEXT    NOT NULL DEFAULT ''
+                    trajectory      TEXT    NOT NULL DEFAULT '',
+                    correlation_id  TEXT    NOT NULL DEFAULT '',
+                    hmac            TEXT    NOT NULL DEFAULT ''
                 )
             """)
+            # Migration for existing DBs that pre-date the chain columns.
+            for col, ddl in (
+                ("correlation_id", "ALTER TABLE memory_access_log "
+                                   "ADD COLUMN correlation_id TEXT NOT NULL DEFAULT ''"),
+                ("hmac", "ALTER TABLE memory_access_log "
+                         "ADD COLUMN hmac TEXT NOT NULL DEFAULT ''"),
+            ):
+                try:
+                    conn.execute(f"SELECT {col} FROM memory_access_log LIMIT 0")
+                except sqlite3.OperationalError:
+                    conn.execute(ddl)
+                    logger.info("[AUDIT_LOG] Migrated: added %s column", col)
+
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_mal_timestamp
                 ON memory_access_log (timestamp DESC)
@@ -106,31 +126,60 @@ def log_access(
     interleaving on a shared cursor.
     """
     now = datetime.now(timezone.utc).isoformat()
+    # Read the gateway's correlation_id (None outside a dispatch).
+    try:
+        from core.security.dispatch_audit import current_correlation_id
+        corr = current_correlation_id.get() or ""
+    except Exception:
+        corr = ""
+
+    row = {
+        "timestamp": now,
+        "agent_id": agent_id,
+        "operation": operation,
+        "path": path,
+        "detail_level": detail_level,
+        "mode": mode,
+        "accessible": 1 if accessible else 0,
+        "conversation_id": conversation_id,
+        "trajectory": trajectory,
+        "correlation_id": corr,
+    }
+
     conn = None
     try:
         conn = _open()
-        conn.execute(
-            """
-            INSERT INTO memory_access_log
-                (timestamp, agent_id, operation, path, detail_level,
-                 mode, accessible, conversation_id, trajectory)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                now,
-                agent_id,
-                operation,
-                path,
-                detail_level,
-                mode,
-                1 if accessible else 0,
-                conversation_id,
-                trajectory,
-            ),
-        )
-        conn.commit()
+        from core.security.audit_chain import append_chained
+        append_chained(conn, "memory_access_log", row)
     except sqlite3.Error as exc:
         logger.error("Failed to write audit log entry: %s", exc)
+    except Exception as exc:
+        # HMAC chain failure (e.g. key file unreachable) — log loudly,
+        # but don't crash the operation. The proactive monitor will
+        # spot the bad chain.
+        logger.error("Audit log chain write failed: %s", exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# Public re-export for the proactive monitor.
+def verify_audit_chain() -> Optional[int]:
+    """Return None if the chain is clean, else the id of the first
+    tampered row."""
+    conn = None
+    try:
+        conn = _open()
+        from core.security.audit_chain import verify_chain
+        return verify_chain(
+            conn, "memory_access_log",
+            ["timestamp", "agent_id", "operation", "path", "detail_level",
+             "mode", "accessible", "conversation_id", "trajectory",
+             "correlation_id"],
+        )
     finally:
         if conn is not None:
             try:
