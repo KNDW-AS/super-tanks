@@ -256,31 +256,19 @@ class ZephScanner:
         return issues, violations
 
     def _scan_sandbox_escapes(self, content: str, filename: str) -> List[Dict]:
+        """Scan for sandbox escape patterns via AST analysis.
+
+        AST analysis catches obfuscation that the previous regex
+        approach silently passed:
+          - `from os import system as s` then `s("rm -rf /")`
+          - `getattr(__builtins__, "ex" + "ec")(...)`
+          - `__class__.__bases__[0].__subclasses__()`
+          - `importlib.import_module("os").system(...)`
+        Files that fail to parse return a single "syntax_error"
+        violation rather than passing silently.
         """
-        Scan for sandbox escape patterns. Line-by-line.
-        Skips pure comment lines (starting with #).
-        Returns list of violation dicts — any result means HARD FAIL.
-        """
-        violations = []
-        lines = content.split('\n')
-
-        for line_num, line in enumerate(lines, 1):
-            stripped = line.strip()
-            # Skip pure comment lines — mentions in comments are not executable
-            if stripped.startswith('#'):
-                continue
-
-            for compiled_re, description in self._compiled_escape_patterns:
-                if compiled_re.search(line):
-                    violations.append({
-                        "file": filename,
-                        "line": line_num,
-                        "content": stripped[:200],
-                        "pattern": description,
-                        "severity": "CRITICAL",
-                    })
-
-        return violations
+        from core.zeph_quarantine_ast import scan_python_source
+        return scan_python_source(content, filename)
 
     def _check_syntax(self, content: str) -> Optional[str]:
         """Check Python syntax, return error message if invalid"""
