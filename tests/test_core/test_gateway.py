@@ -231,6 +231,95 @@ class TestAllowlistEnforcement:
         assert "Allowlist unavailable" in resp.error
 
 
+# ── Dispatch audit trail ───────────────────────────────────────────────────
+
+class TestDispatchAudit:
+    """The gateway writes one row per dispatch to dispatch_audit, with
+    a fresh correlation_id, regardless of allow/deny outcome. The
+    correlation_id is also visible to downstream collaborators via the
+    ContextVar — that's what makes incident reconstruction possible."""
+
+    @pytest.fixture
+    def audit(self, tmp_path, monkeypatch):
+        from core.security import dispatch_audit
+        monkeypatch.setattr(dispatch_audit, "DB_PATH",
+                            tmp_path / "dispatch.db")
+        monkeypatch.setattr(dispatch_audit, "_initialised", False)
+        return dispatch_audit
+
+    def test_allowed_dispatch_recorded_with_corr_id(
+            self, fake_registry, identity, audit):
+        fake_registry["t"] = _Tool(name="t", required_role="READ",
+                                   result="data")
+        from core.security import tool_allowlists
+        import unittest.mock as _m
+        with _m.patch.object(tool_allowlists, "is_tool_allowed",
+                             return_value=True):
+            asyncio.run(gateway.dispatch_tool(
+                "t", {}, "aeris", "READ",
+                identity_token=_token(identity, "aeris")))
+        rows = audit.get_dispatch_history(agent_id="aeris")
+        assert len(rows) == 1
+        assert rows[0]["verdict"] == "allowed"
+        assert rows[0]["result_success"] == 1
+        assert rows[0]["correlation_id"]  # non-empty
+
+    def test_denied_identity_recorded(
+            self, fake_registry, identity, audit):
+        fake_registry["t"] = _Tool(name="t", required_role="READ")
+        asyncio.run(gateway.dispatch_tool(
+            "t", {}, "aeris", "READ", identity_token=None))
+        rows = audit.get_dispatch_history(agent_id="aeris")
+        assert len(rows) == 1
+        assert rows[0]["verdict"] == "denied_identity"
+
+    def test_denied_role_recorded(
+            self, fake_registry, identity, audit):
+        fake_registry["t"] = _Tool(name="t", required_role="ADMIN")
+        asyncio.run(gateway.dispatch_tool(
+            "t", {}, "system", "READ",
+            identity_token=_token(identity, "system")))
+        rows = audit.get_dispatch_history(agent_id="system")
+        assert rows[0]["verdict"] == "denied_role"
+
+    def test_denied_allowlist_recorded(
+            self, fake_registry, monkeypatch, identity, audit):
+        fake_registry["t"] = _Tool(name="t", required_role="READ")
+        from core.security import tool_allowlists
+        monkeypatch.setattr(tool_allowlists, "is_tool_allowed",
+                            lambda a, t: False)
+        asyncio.run(gateway.dispatch_tool(
+            "t", {}, "aeris", "READ",
+            identity_token=_token(identity, "aeris")))
+        rows = audit.get_dispatch_history(agent_id="aeris")
+        assert rows[0]["verdict"] == "denied_allowlist"
+
+    def test_no_wrapper_recorded(self, fake_registry, identity, audit):
+        # Unknown tool returns None, but still gets a row so the
+        # incident timeline has no gaps.
+        asyncio.run(gateway.dispatch_tool(
+            "unknown_tool", {}, "system", "READ",
+            identity_token=_token(identity, "system")))
+        rows = audit.get_dispatch_history(agent_id="system")
+        assert rows[0]["verdict"] == "no_wrapper"
+
+    def test_correlation_id_is_unique_per_dispatch(
+            self, fake_registry, identity, audit):
+        fake_registry["t"] = _Tool(name="t", required_role="READ",
+                                   result="ok")
+        from core.security import tool_allowlists
+        import unittest.mock as _m
+        with _m.patch.object(tool_allowlists, "is_tool_allowed",
+                             return_value=True):
+            for _ in range(3):
+                asyncio.run(gateway.dispatch_tool(
+                    "t", {}, "aeris", "READ",
+                    identity_token=_token(identity, "aeris")))
+        rows = audit.get_dispatch_history(agent_id="aeris")
+        corr_ids = {r["correlation_id"] for r in rows}
+        assert len(corr_ids) == 3  # all distinct
+
+
 # ── Request shape passed through ───────────────────────────────────────────
 
 class TestRequestPassthrough:
