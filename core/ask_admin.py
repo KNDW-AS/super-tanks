@@ -547,6 +547,7 @@ def ask_admin_iron_link(
     import concurrent.futures
     
     def send_via_zeph():
+        loop = None
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -559,7 +560,8 @@ def ask_admin_iron_link(
                 raw_params=request.raw_params,
             ))
         finally:
-            loop.close()
+            if loop is not None:
+                loop.close()
     
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
