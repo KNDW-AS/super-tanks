@@ -22,6 +22,7 @@ def shadow(tmp_path, monkeypatch):
 
     monkeypatch.setattr(shadow_store, "SHADOW_DB", tmp_path / "shadow.db")
     monkeypatch.setattr(hierarchical_store, "STORE_ROOT", tmp_path / "hm")
+    monkeypatch.setattr(shadow_store, "_initialised", False)
     shadow_store._init_db()
 
     # Stub hybrid_search.store_embedding to a no-op so approve() doesn't
@@ -42,8 +43,9 @@ def shadow(tmp_path, monkeypatch):
 # ── propose: classification ────────────────────────────────────────────────
 
 class TestProposeClassification:
-    def test_high_confidence_create_gets_auto_approve_window(self, shadow):
-        result = shadow.propose("zeph", "/family/preferences/lighting",
+    def test_high_confidence_create_in_own_namespace_auto_approves(self, shadow):
+        # Auto-approve is now restricted to the agent's private namespace.
+        result = shadow.propose("zeph", "/zeph/learned/lighting",
                                 "abstract", "overview",
                                 {"k": "v"}, confidence=0.9)
         assert result["status"] == "pending"
@@ -53,6 +55,17 @@ class TestProposeClassification:
         target = datetime.fromisoformat(result["auto_approve_at"])
         diff = target - datetime.now(timezone.utc)
         assert timedelta(hours=23) < diff < timedelta(hours=25)
+
+    def test_high_confidence_create_outside_namespace_requires_manual_review(self, shadow):
+        # The agent CANNOT auto-approve writes into public/family/system
+        # paths by asserting high confidence — that's the memory-poisoning
+        # attack vector the threat-model reviewer flagged. Manual review only.
+        result = shadow.propose("zeph", "/family/preferences/lighting",
+                                "abstract", "overview",
+                                {"k": "v"}, confidence=0.9)
+        assert result["status"] == "pending"
+        assert result["auto_approve_at"] is None
+        assert "Outside" in result["reason"] or "manual" in result["reason"].lower()
 
     def test_low_confidence_auto_rejected(self, shadow):
         result = shadow.propose("zeph", "/family/preferences/x",
@@ -92,6 +105,9 @@ class TestSensitivePathDetection:
         "/family/routines",
         "/aeris/learned/x",
         "/random/path",
+        # Sibling paths must NOT be classified as sensitive — boundary check.
+        "/family/finances_summary",  # sibling of /family/finance
+        "/system/configuration_log",  # sibling of /system/config
     ])
     def test_not_sensitive(self, shadow, path):
         assert shadow._is_sensitive_path(path) is False

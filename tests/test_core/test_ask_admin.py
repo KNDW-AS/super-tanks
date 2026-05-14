@@ -70,9 +70,10 @@ class TestApprovalRequest:
 # ── ApprovalStore: create / get ────────────────────────────────────────────
 
 class TestStoreCreateGet:
-    def test_creates_with_short_request_id(self, store):
+    def test_creates_with_full_uuid_request_id(self, store):
         req = store.create_request("shell_exec", "zeph", "reason", {"a": 1})
-        assert len(req.request_id) == 8
+        # Full UUID (36 chars incl. dashes) — collision-resistant.
+        assert len(req.request_id) == 36
         assert req.status == ApprovalStatus.PENDING
         assert req.tool_name == "shell_exec"
 
@@ -202,6 +203,32 @@ class TestApproveDeny:
 
 
 # ── expire_old_requests ────────────────────────────────────────────────────
+
+class TestListPending:
+    def test_returns_only_pending_oldest_first(self, store):
+        a = store.create_request("t", "u", "x", {"a": 1})
+        b = store.create_request("t", "u", "x", {"a": 2})
+        # Resolve the older one — it should drop out of the list.
+        store.approve_request(a.request_id, "william")
+        pending = store.list_pending()
+        ids = [p.request_id for p in pending]
+        assert ids == [b.request_id]
+
+    def test_excludes_expired(self, store):
+        live = store.create_request("t", "u", "x", {"a": 1}, ttl_seconds=300)
+        store.create_request("t", "u", "y", {"a": 2}, ttl_seconds=-1)
+        time.sleep(0.01)
+        ids = [p.request_id for p in store.list_pending()]
+        assert ids == [live.request_id]
+
+    def test_limit_respected(self, store):
+        for i in range(5):
+            store.create_request("t", "u", str(i), {"i": i})
+        assert len(store.list_pending(limit=3)) == 3
+
+    def test_empty_when_none_pending(self, store):
+        assert store.list_pending() == []
+
 
 class TestExpireOldRequests:
     def test_marks_expired_only(self, store):

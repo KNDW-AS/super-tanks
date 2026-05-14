@@ -7,30 +7,120 @@ and the audit log. Each test uses the `user_db` fixture which
 points USER_DB at a per-test tmp file and re-initialises the schema.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 
-# ── PIN hashing ────────────────────────────────────────────────────────────
+# ── PIN hashing (scrypt with per-user salt) ────────────────────────────────
 
 class TestPinHash:
-    def test_hash_is_deterministic(self, user_db):
-        assert user_db._hash_pin("1234") == user_db._hash_pin("1234")
+    def test_hash_format_is_scrypt(self, user_db):
+        h = user_db._hash_pin("1234")
+        assert h.startswith("scrypt$")
+        # Three fields separated by $.
+        parts = h.split("$")
+        assert len(parts) == 3
 
-    def test_different_pins_yield_different_hashes(self, user_db):
-        assert user_db._hash_pin("1234") != user_db._hash_pin("1235")
+    def test_same_pin_yields_different_hashes_due_to_random_salt(self, user_db):
+        # Per-user salt means two stores of the same PIN produce
+        # different stored values. This stops rainbow tables.
+        assert user_db._hash_pin("1234") != user_db._hash_pin("1234")
 
-    def test_hash_length_is_32_hex_chars(self, user_db):
-        h = user_db._hash_pin("anything")
-        assert len(h) == 32
-        int(h, 16)  # raises if not hex
+    def test_verify_with_scrypt_hash_round_trip(self, user_db):
+        h = user_db._hash_pin("1234")
+        assert user_db._verify_pin("1234", h) is True
+        assert user_db._verify_pin("9999", h) is False
 
-    def test_hash_uses_install_salt(self, user_db):
-        # Same PIN must not equal raw sha256(pin) — the salt is part of input.
-        import hashlib
-        raw = hashlib.sha256(b"1234").hexdigest()[:32]
-        assert user_db._hash_pin("1234") != raw
+    def test_verify_with_legacy_hash_still_works(self, user_db):
+        # The transparent migration relies on _verify_pin accepting the
+        # old sha256[:32] format.
+        legacy = user_db._legacy_hash_pin("1234")
+        assert user_db._verify_pin("1234", legacy) is True
+        assert user_db._verify_pin("9999", legacy) is False
+
+    def test_verify_handles_corrupt_scrypt_field(self, user_db):
+        assert user_db._verify_pin("1234", "scrypt$nothex$nothex") is False
+        assert user_db._verify_pin("1234", "scrypt$") is False
+
+
+# ── Transparent migration from legacy SHA-256 to scrypt ───────────────────
+
+class TestPinMigration:
+    def test_first_login_upgrades_legacy_hash(self, user_db):
+        # Insert a user with a legacy hash directly.
+        legacy_hash = user_db._legacy_hash_pin("1234")
+        conn = user_db._get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO st_users (user_id, name, pin_hash, level, "
+                "created_at, permitted_entities) "
+                "VALUES (?, ?, ?, 5, ?, '[]')",
+                ("admin", "Admin", legacy_hash, "2024-01-01T00:00:00"))
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = user_db.authenticate("admin", "1234")
+        assert result is not None  # legacy hash still authenticates
+
+        # The stored hash is now scrypt.
+        conn = user_db._get_conn()
+        try:
+            new = conn.execute(
+                "SELECT pin_hash FROM st_users WHERE user_id=?",
+                ("admin",)).fetchone()[0]
+        finally:
+            conn.close()
+        assert new.startswith("scrypt$")
+        # And the legacy hash is gone.
+        assert new != legacy_hash
+
+
+# ── Rate limiting ─────────────────────────────────────────────────────────
+
+class TestAuthRateLimit:
+    def test_locks_out_after_max_failures(self, seed_admin):
+        for _ in range(seed_admin.MAX_AUTH_FAILURES):
+            assert seed_admin.authenticate("admin", "wrong") is None
+        # Now the correct PIN is also rejected because we're locked out.
+        assert seed_admin.authenticate("admin", "0000") is None
+
+    def test_successful_login_resets_failure_counter(self, seed_admin):
+        for _ in range(seed_admin.MAX_AUTH_FAILURES - 1):
+            seed_admin.authenticate("admin", "wrong")
+        # One more failure would lock out; instead succeed.
+        assert seed_admin.authenticate("admin", "0000") is not None
+        # Now we have a clean slate.
+        for _ in range(seed_admin.MAX_AUTH_FAILURES - 1):
+            seed_admin.authenticate("admin", "wrong")
+        # Still able to log in — counter was reset.
+        assert seed_admin.authenticate("admin", "0000") is not None
+
+    def test_unknown_user_counted_against_rate_limit(self, seed_admin):
+        # Probing for valid user_ids must also be rate-limited.
+        for _ in range(seed_admin.MAX_AUTH_FAILURES):
+            seed_admin.authenticate("ghost", "anything")
+        # Even unknown users hit the wall now.
+        result = seed_admin.authenticate("ghost", "anything")
+        assert result is None
+
+    def test_failures_outside_window_dont_count(self, seed_admin):
+        # Backdate failures to before the window.
+        old_ts = (datetime.now(timezone.utc)
+                  - timedelta(minutes=seed_admin.AUTH_FAILURE_WINDOW_MINUTES + 1)
+                  ).isoformat()
+        conn = seed_admin._get_conn()
+        try:
+            for _ in range(seed_admin.MAX_AUTH_FAILURES + 5):
+                conn.execute(
+                    "INSERT INTO st_auth_failures (user_id, timestamp) VALUES (?, ?)",
+                    ("admin", old_ts))
+            conn.commit()
+        finally:
+            conn.close()
+        # Stale failures don't block; valid PIN still works.
+        assert seed_admin.authenticate("admin", "0000") is not None
 
 
 # ── User CRUD ──────────────────────────────────────────────────────────────
@@ -121,6 +211,27 @@ class TestUpdateUser:
         res = user_db.update_user("ghost", actor="admin", name="x")
         assert res["success"] is False
 
+    def test_non_privileged_actor_rejected(self, user_db):
+        # Docstring: "Actor must be Level 5". Verify non-admin actors are
+        # denied — without this, a Level-1 caller could demote the admin.
+        user_db.create_user(name="Admin", pin="0000", level=5, created_by="system")
+        user_db.create_user(name="Kid", pin="1", level=1, created_by="admin")
+        res = user_db.update_user("admin", actor="kid", name="hacked")
+        assert res["success"] is False
+        assert "Level 5" in res["error"]
+        # And the field was NOT changed.
+        assert user_db.get_user("admin")["name"] == "Admin"
+
+    def test_unknown_actor_rejected(self, seed_admin):
+        res = seed_admin.update_user("admin", actor="ghost", name="x")
+        assert res["success"] is False
+
+    def test_system_bootstrap_actor_allowed(self, user_db):
+        # The synthetic 'system' actor is a bootstrap escape hatch.
+        user_db.create_user(name="Admin", pin="0000", level=5, created_by="system")
+        res = user_db.update_user("admin", actor="system", name="Boss")
+        assert res["success"] is True
+
 
 class TestDeleteUser:
     def test_cannot_delete_last_level_5(self, seed_admin):
@@ -143,6 +254,15 @@ class TestDeleteUser:
     def test_unknown_user_returns_error(self, seed_admin):
         res = seed_admin.delete_user("ghost", actor="admin")
         assert res["success"] is False
+
+    def test_non_privileged_actor_rejected(self, seed_admin):
+        seed_admin.create_user(name="Kid", pin="1", level=1, created_by="admin")
+        seed_admin.create_user(name="Target", pin="1", level=2, created_by="admin")
+        res = seed_admin.delete_user("target", actor="kid")
+        assert res["success"] is False
+        assert "Level 5" in res["error"]
+        # Target survived.
+        assert seed_admin.get_user("target") is not None
 
 
 # ── Authentication ─────────────────────────────────────────────────────────
@@ -174,6 +294,141 @@ class TestAuthenticate:
         a = seed_admin.authenticate("admin", "0000")["session_id"]
         b = seed_admin.authenticate("admin", "0000")["session_id"]
         assert a != b
+
+    def test_session_has_future_expiry(self, seed_admin):
+        result = seed_admin.authenticate("admin", "0000")
+        expires_at = datetime.fromisoformat(result["expires_at"])
+        # Default TTL is 24h; allow a few seconds of slack for clock drift.
+        delta = expires_at - datetime.now(timezone.utc)
+        assert timedelta(hours=23, minutes=59) < delta < timedelta(hours=24, minutes=1)
+
+    def test_custom_ttl_respected(self, seed_admin):
+        result = seed_admin.authenticate("admin", "0000", ttl_hours=1)
+        expires_at = datetime.fromisoformat(result["expires_at"])
+        delta = expires_at - datetime.now(timezone.utc)
+        assert timedelta(minutes=59) < delta < timedelta(minutes=61)
+
+
+# ── Session validation ────────────────────────────────────────────────────
+
+class TestValidateSession:
+    def test_valid_session_returns_user(self, seed_admin):
+        sid = seed_admin.authenticate("admin", "0000")["session_id"]
+        result = seed_admin.validate_session(sid)
+        assert result is not None
+        assert result["user_id"] == "admin"
+        assert result["level"] == 5
+
+    def test_unknown_session_returns_none(self, seed_admin):
+        assert seed_admin.validate_session("nonexistent-id") is None
+
+    def test_empty_session_returns_none(self, seed_admin):
+        assert seed_admin.validate_session("") is None
+        assert seed_admin.validate_session(None) is None  # type: ignore[arg-type]
+
+    def test_expired_session_returns_none(self, user_db, monkeypatch):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        sid = user_db.authenticate("william", "1234", ttl_hours=1)["session_id"]
+
+        # Backdate expires_at to the past.
+        conn = user_db._get_conn()
+        try:
+            past = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+            conn.execute("UPDATE st_sessions SET expires_at=? WHERE session_id=?",
+                         (past, sid))
+            conn.commit()
+        finally:
+            conn.close()
+
+        assert user_db.validate_session(sid) is None
+
+    def test_expired_session_is_purged_on_check(self, user_db):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        sid = user_db.authenticate("william", "1234")["session_id"]
+        # Make it expired.
+        conn = user_db._get_conn()
+        try:
+            past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+            conn.execute("UPDATE st_sessions SET expires_at=? WHERE session_id=?",
+                         (past, sid))
+            conn.commit()
+        finally:
+            conn.close()
+
+        user_db.validate_session(sid)
+        # The row should be gone after the validate call.
+        conn = user_db._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT session_id FROM st_sessions WHERE session_id=?",
+                (sid,)).fetchone()
+        finally:
+            conn.close()
+        assert row is None
+
+    def test_corrupt_expires_at_is_deleted(self, user_db):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        sid = user_db.authenticate("william", "1234")["session_id"]
+        conn = user_db._get_conn()
+        try:
+            conn.execute("UPDATE st_sessions SET expires_at='not a date' WHERE session_id=?",
+                         (sid,))
+            conn.commit()
+        finally:
+            conn.close()
+        assert user_db.validate_session(sid) is None
+
+
+class TestRevokeSession:
+    def test_revoke_removes_session(self, seed_admin):
+        sid = seed_admin.authenticate("admin", "0000")["session_id"]
+        assert seed_admin.revoke_session(sid) is True
+        assert seed_admin.validate_session(sid) is None
+
+    def test_revoke_unknown_returns_false(self, seed_admin):
+        assert seed_admin.revoke_session("ghost") is False
+
+    def test_other_sessions_unaffected(self, user_db):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        a = user_db.authenticate("william", "1234")["session_id"]
+        b = user_db.authenticate("william", "1234")["session_id"]
+        user_db.revoke_session(a)
+        assert user_db.validate_session(a) is None
+        assert user_db.validate_session(b) is not None
+
+
+class TestPurgeExpiredSessions:
+    def test_removes_only_expired(self, user_db):
+        user_db.create_user(name="William", pin="1234", level=5, created_by="system")
+        live = user_db.authenticate("william", "1234")["session_id"]
+        expired = user_db.authenticate("william", "1234")["session_id"]
+        conn = user_db._get_conn()
+        try:
+            past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            conn.execute("UPDATE st_sessions SET expires_at=? WHERE session_id=?",
+                         (past, expired))
+            conn.commit()
+        finally:
+            conn.close()
+        purged = user_db.purge_expired_sessions()
+        assert purged == 1
+        assert user_db.validate_session(live) is not None
+        assert user_db.validate_session(expired) is None
+
+    def test_zero_when_nothing_expired(self, seed_admin):
+        seed_admin.authenticate("admin", "0000")
+        assert seed_admin.purge_expired_sessions() == 0
+
+
+# ── Delete cascade ────────────────────────────────────────────────────────
+
+class TestSessionCascadeOnUserDelete:
+    def test_deleting_user_revokes_their_sessions(self, seed_admin):
+        seed_admin.create_user(name="Kid", pin="1", level=1, created_by="admin")
+        sid = seed_admin.authenticate("kid", "1")["session_id"]
+        assert seed_admin.validate_session(sid) is not None
+        seed_admin.delete_user("kid", actor="admin")
+        assert seed_admin.validate_session(sid) is None
 
 
 # ── Capabilities ───────────────────────────────────────────────────────────

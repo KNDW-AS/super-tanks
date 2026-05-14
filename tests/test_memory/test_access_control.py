@@ -63,6 +63,13 @@ def env(monkeypatch):
     fake_ts.record_event = lambda agent, event, details="": (
         calls["trust_events"].append((agent, event, details))
     )
+
+    # _TrustAuthority is a context manager wrapper — production callers
+    # now use it to authorise mutations. The fake just no-ops.
+    class _FakeAuthority:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+    fake_ts._TrustAuthority = _FakeAuthority
     monkeypatch.setitem(sys.modules, "core.security.trust_score", fake_ts)
 
     # ── Fake audit_log.log_access ──
@@ -142,15 +149,13 @@ class TestGetPathClassification:
         assert ac.get_path_classification("/family/finance/") == "sensitive"
         assert ac.get_path_classification("family/finance/") == "sensitive"
 
-    def test_prefix_match_without_path_boundary_overclassifies(self, env):
-        # FINDING: classification uses raw startswith with no trailing
-        # separator check, so "/family/finance_other" is classified as
-        # sensitive even though it's a semantically distinct path. This
-        # is fail-closed (over-restrictive, never under-restrictive), so
-        # it's safe in this direction. Documented so the next refactor
-        # is intentional about it.
+    def test_prefix_boundary_respected(self, env):
+        # Sibling paths must NOT inherit a parent's classification.
+        # /family/finance_other is semantically distinct from
+        # /family/finance and should classify as unknown.
         ac, _, _ = env
-        assert ac.get_path_classification("/family/finance_other") == "sensitive"
+        assert ac.get_path_classification("/family/finance_other") == "unknown"
+        assert ac.get_path_classification("/family/financex") == "unknown"
 
 
 # ── is_path_accessible — public paths ──────────────────────────────────────
@@ -270,11 +275,11 @@ class TestModeAutoDetection:
         # mode=None → falls back to get_mode() → LOCKDOWN → sensitive allowed
         assert ac.is_path_accessible("/family/finance", "aeris", mode=None) is True
 
-    def test_mode_detection_failure_fails_closed(self, monkeypatch):
-        # If super_tanks_mode raises on import, the resolver defaults to
-        # "lockdown" which is the safe (most-restrictive) closure. We
-        # verify by checking a sensitive path becomes allowed even though
-        # we never set a mode.
+    def test_mode_detection_failure_denies_sensitive(self, monkeypatch):
+        # When super_tanks_mode is unavailable we don't know if a human
+        # is supervising. The fallback must deny sensitive access, not
+        # grant it. (Old behaviour: fallback was "lockdown", which
+        # _allows_ sensitive — a fail-OPEN gap dressed up as fail-closed.)
         broken = types.ModuleType("core.security.super_tanks_mode")
 
         def _boom():
@@ -283,7 +288,6 @@ class TestModeAutoDetection:
         broken.get_mode = _boom
         monkeypatch.setitem(sys.modules, "core.security.super_tanks_mode", broken)
 
-        # Stub other collaborators so the tripwire path can still run.
         for mod_name in ("core.security.trust_score", "core.memory.audit_log"):
             stub = types.ModuleType(mod_name)
             if mod_name.endswith("trust_score"):
@@ -295,10 +299,8 @@ class TestModeAutoDetection:
                             types.SimpleNamespace(post=lambda *a, **kw: None))
 
         from core.memory import access_control
-        # Sensitive path with no mode argument and failing detection →
-        # internal default is "lockdown" → sensitive allowed.
         assert access_control.is_path_accessible(
-            "/family/finance", "aeris", mode=None) is True
+            "/family/finance", "aeris", mode=None) is False
 
 
 # ── trigger_tripwire_alarm directly ────────────────────────────────────────
@@ -335,8 +337,9 @@ class TestTriggerTripwireAlarm:
         assert entry["path"] == "/system/admin_keys"
         assert entry["accessible"] is False
 
-    def test_never_raises_when_all_subsystems_fail(self, monkeypatch):
-        # Every collaborator throws — function must still return cleanly.
+    def test_never_raises_when_all_subsystems_fail(self, monkeypatch, caplog):
+        # Every collaborator throws — function must still return cleanly
+        # AND must log each failure (silent swallow is a separate bug).
         for mod_name, attr, value in [
             ("core.security.super_tanks_mode", "get_mode",
              lambda: (_ for _ in ()).throw(RuntimeError("mode down"))),
@@ -361,5 +364,12 @@ class TestTriggerTripwireAlarm:
         monkeypatch.setenv("AERIS_GOGATE_TELEGRAM_TOKEN", "fake")
 
         from core.memory import access_control
+        caplog.set_level("ERROR", logger="super_tanks.memory.access_control")
         # Must not raise.
         access_control.trigger_tripwire_alarm("/william/secrets", "aeris")
+        # And EACH failed subsystem must have left a log trail so the
+        # operator can see what broke.
+        error_msgs = [r.message for r in caplog.records if r.levelname == "ERROR"]
+        assert any("LOCKDOWN" in m for m in error_msgs)
+        assert any("Telegram" in m for m in error_msgs)
+        assert any("audit log" in m for m in error_msgs)

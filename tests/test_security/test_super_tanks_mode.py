@@ -27,9 +27,15 @@ def stm(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_timeout_hours", 8)
     monkeypatch.setattr(m, "_night_mode_active", False)
     monkeypatch.setattr(m, "_last_interaction", time.time())
+    monkeypatch.setattr(m, "_MODEL_TIER_FINGERPRINT", None)
+    monkeypatch.setattr(m, "_LAST_BASELINED_TIER", None)
 
     state_file = tmp_path / "super_tanks_state.json"
     monkeypatch.setattr(m, "STATE_FILE", state_file)
+    # Redirect ZEF baseline persistence so mark_zef_baselined doesn't
+    # write into the real config dir during tests.
+    baseline_file = tmp_path / "zef_baseline.json"
+    monkeypatch.setattr(m, "ZEF_BASELINE_FILE", baseline_file)
 
     # Capture Telegram posts.
     posts = []
@@ -39,12 +45,15 @@ def stm(tmp_path, monkeypatch):
     monkeypatch.setenv("AERIS_GOGATE_TELEGRAM_TOKEN", "fake")
     monkeypatch.setenv("AERIS_ADMIN_CHAT_ID", "1")
 
-    # Stub audit_store (lazy-imported in set_mode).
+    # Stub memory audit log (lazy-imported in set_mode). Previously
+    # set_mode imported core.audit_store, a module that doesn't exist —
+    # the import error was silently swallowed and mode changes ran
+    # un-audited. The real implementation now routes through the
+    # existing memory audit log.
     audit_calls = []
-    fake_audit = types.ModuleType("core.audit_store")
-    fake_audit.get_audit_store = lambda: types.SimpleNamespace(
-        log_audit=lambda **kw: audit_calls.append(kw))
-    monkeypatch.setitem(sys.modules, "core.audit_store", fake_audit)
+    fake_audit = types.ModuleType("core.memory.audit_log")
+    fake_audit.log_access = lambda **kw: audit_calls.append(kw)
+    monkeypatch.setitem(sys.modules, "core.memory.audit_log", fake_audit)
 
     # Stub night_queue.
     queue_calls = []
@@ -112,7 +121,10 @@ class TestSetMode:
     def test_audit_log_called(self, stm):
         stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
         assert len(stm.audit_calls) == 1
-        assert stm.audit_calls[0]["action"] == "super_tanks_mode_change"
+        entry = stm.audit_calls[0]
+        assert entry["operation"] == "MODE_CHANGE"
+        assert "lockdown->autonomous" in entry["path"]
+        assert entry["mode"] == "autonomous"
 
     def test_telegram_notification_sent(self, stm):
         stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
@@ -349,3 +361,90 @@ class TestGetEffectiveMode:
         info = stm.m.get_effective_mode()
         assert info["night_mode"] is True
         assert "🌙" in info["display"]
+
+
+# ── Tier-rebaseline gate ───────────────────────────────────────────────────
+
+class TestTierRebaseline:
+    """Force ZEF re-baseline before AUTONOMOUS on a new upstream model.
+
+    A new Claude / Gemini tier may have different refusal training. Our
+    ZEF false-positive / true-positive measurements were taken against
+    the previous tier. Until those are re-measured against the new
+    tier, AUTONOMOUS would grant wider autonomy to a model whose
+    safety surface is unmeasured.
+    """
+
+    def test_no_tier_set_means_no_rebaseline(self, stm):
+        # Legacy / pre-Mythos: tier tracking unused → never blocks.
+        assert stm.m.needs_rebaseline() is False
+        stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
+        assert stm.m.get_mode() == stm.m.TankMode.AUTONOMOUS
+
+    def test_baseline_matches_current_tier(self, stm):
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-mythos-2026-04")
+        assert stm.m.needs_rebaseline() is False
+
+    def test_baseline_mismatched_tier_needs_rebaseline(self, stm):
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-sonnet-4-6")
+        assert stm.m.needs_rebaseline() is True
+
+    def test_tier_set_without_baseline_needs_rebaseline(self, stm):
+        # New tier observed but no baseline ever recorded.
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        assert stm.m.needs_rebaseline() is True
+
+    def test_set_mode_autonomous_refused_when_stale(self, stm):
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-sonnet-4-6")
+        with pytest.raises(stm.m.StaleBaselineError):
+            stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
+        # Mode must NOT have flipped; still LOCKDOWN.
+        assert stm.m.get_mode() == stm.m.TankMode.LOCKDOWN
+
+    def test_set_mode_lockdown_never_blocked_by_stale_baseline(self, stm):
+        # Going TO lockdown is always safe — only AUTONOMOUS is gated.
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-sonnet-4-6")
+        # Pretend we were already AUTONOMOUS somehow (e.g. legacy state).
+        # set_mode(LOCKDOWN) must never raise.
+        stm.m.set_mode(stm.m.TankMode.LOCKDOWN)
+        assert stm.m.get_mode() == stm.m.TankMode.LOCKDOWN
+
+    def test_remediation_flow_unblocks_autonomous(self, stm):
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        stm.m.mark_zef_baselined("claude-sonnet-4-6")
+        # Operator runs the corpus and signs off on the new tier.
+        stm.m.mark_zef_baselined("claude-mythos-2026-04")
+        # Now AUTONOMOUS is allowed.
+        stm.m.set_mode(stm.m.TankMode.AUTONOMOUS, timeout_hours=8)
+        assert stm.m.get_mode() == stm.m.TankMode.AUTONOMOUS
+
+    def test_mark_zef_baselined_persists_to_disk(self, stm):
+        stm.m.mark_zef_baselined("claude-mythos-2026-04")
+        assert stm.m.ZEF_BASELINE_FILE.exists()
+        data = json.loads(stm.m.ZEF_BASELINE_FILE.read_text())
+        assert data["fingerprint"] == "claude-mythos-2026-04"
+        assert "baselined_at" in data
+
+    def test_load_zef_baseline_round_trip(self, stm, monkeypatch):
+        # Persist via the API.
+        stm.m.mark_zef_baselined("claude-mythos-2026-04")
+        # Wipe in-memory state, simulate restart.
+        monkeypatch.setattr(stm.m, "_LAST_BASELINED_TIER", None)
+        # Load picks the fingerprint back up.
+        loaded = stm.m.load_zef_baseline()
+        assert loaded == "claude-mythos-2026-04"
+        # And the in-memory global is restored.
+        stm.m.set_current_model_tier("claude-mythos-2026-04")
+        assert stm.m.needs_rebaseline() is False
+
+    def test_load_zef_baseline_missing_file_is_none(self, stm):
+        assert stm.m.load_zef_baseline() is None
+
+    def test_load_zef_baseline_corrupt_file_does_not_crash(self, stm):
+        stm.m.ZEF_BASELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        stm.m.ZEF_BASELINE_FILE.write_text("{ not json")
+        assert stm.m.load_zef_baseline() is None

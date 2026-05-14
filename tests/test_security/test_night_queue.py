@@ -30,11 +30,29 @@ class TestQueueAction:
         assert entry["params"] == {"entity": "light.x"}
         assert entry["reason"] == "night defer"
 
-    def test_multiple_entries_ordered_by_queued_at(self, night_queue_db):
-        for i in range(3):
-            night_queue_db.queue_action("zeph", f"tool_{i}", {"i": i})
-        ids = [e["id"] for e in night_queue_db.get_pending()]
-        assert ids == sorted(ids)
+    def test_pending_ordered_by_queued_at_not_id(self, night_queue_db):
+        # The earlier version inserted three rows and asserted IDs were
+        # in sorted order — trivially true because both id and timestamp
+        # are monotonic on insertion. If somebody swapped the ORDER BY
+        # to `id` the test would still pass. Backdate one of the rows
+        # to verify ORDER BY queued_at actually applies.
+        first = night_queue_db.queue_action("zeph", "tool_a", {"i": 0})
+        second = night_queue_db.queue_action("zeph", "tool_b", {"i": 1})
+        # Backdate the second-inserted row so its queued_at is the
+        # oldest. ORDER BY queued_at must then put it first.
+        conn = night_queue_db._get_conn()
+        try:
+            conn.execute(
+                "UPDATE night_queue SET queued_at='2000-01-01T00:00:00' "
+                "WHERE id=?",
+                (second["queue_id"],))
+            conn.commit()
+        finally:
+            conn.close()
+        pending = night_queue_db.get_pending()
+        # Backdated row should come first.
+        assert pending[0]["tool_name"] == "tool_b"
+        assert pending[1]["tool_name"] == "tool_a"
 
     def test_params_are_json_round_tripped(self, night_queue_db):
         payload = {"nested": {"a": [1, 2, {"æ": "ø"}]}}

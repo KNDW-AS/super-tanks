@@ -43,7 +43,14 @@ class DIQHA(ABC):
     """
     Contract for Home Assistant operations.
     All smart home reads and writes go through this interface.
-    Aeris has READ_ONLY access; Zeph has READ+WRITE.
+
+    NOTE: The actual access policy is enforced by `tool_allowlists.py`,
+    not by this contract. As of v3.2 both Aeris and Zeph have
+    `home_assistant` in their allowlists (Aeris is the family-facing
+    smart-home agent and must be able to control lights/locks/climate).
+    The "Aeris READ_ONLY" line in this docstring earlier was a lie —
+    a maintainer who "fixed" the allowlist to match would have broken
+    Aeris's smarthus control.
     """
 
     @abstractmethod

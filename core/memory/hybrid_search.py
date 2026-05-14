@@ -13,6 +13,7 @@ A tripwire hit in Top-K aborts the search immediately and triggers LOCKDOWN.
 import json
 import logging
 import math
+import threading
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -28,12 +29,33 @@ EMBED_MODEL = "nomic-embed-text"
 EMBED_DIM = 768
 
 
+_initialised: bool = False
+_init_lock = threading.RLock()
+
+
 def _get_conn():
     EMBEDDING_DB.parent.mkdir(parents=True, exist_ok=True)
     conn = open_db(str(EMBEDDING_DB), timeout=15, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
+    _ensure_db()
     return conn
+
+
+def _ensure_db() -> None:
+    """Idempotent schema bootstrap on first DB use."""
+    global _initialised
+    if _initialised:
+        return
+    with _init_lock:
+        if _initialised:
+            return
+        _initialised = True
+        try:
+            _init_db()
+        except Exception:
+            _initialised = False
+            raise
 
 
 def _init_db():
@@ -49,7 +71,7 @@ def _init_db():
     conn.close()
 
 
-_init_db()
+# Schema is created lazily on first _get_conn() call (see _ensure_db).
 
 
 def generate_embedding(text: str) -> Optional[List[float]]:
@@ -222,23 +244,26 @@ def hybrid_search(
     # 3: RRF merge
     merged = rrf_merge(vec_results, text_results)
 
-    # 4: Tripwire check FIRST — abort if any tripwire in top results
-    # Only triggers for agents (aeris/zeph), not admin (william/system)
-    if agent_id in ("aeris", "zeph"):
-        for r in merged[:top_k * 2]:
-            if is_tripwire(r["path"]):
-                logger.critical(
-                    "TRIPWIRE HIT in search: agent=%s query=%r path=%s",
-                    agent_id, query[:50], r["path"],
-                )
-                trigger_tripwire_alarm(r["path"], agent_id)
-                log_access(agent_id, "search_tripwire_hit", r["path"], 0, "search", False)
-                return {
-                    "success": False,
-                    "error": "Security alert triggered",
-                    "results": [],
-                    "tripwire": True,
-                }
+    # 4: Tripwire check FIRST — abort if any tripwire in top results.
+    # Runs for EVERY agent_id. Honeypot paths have no legitimate caller,
+    # so even "william"/"system" hitting one is a signal that something
+    # has spoofed identity or that a tool is misbehaving. The previous
+    # bypass for non-(aeris|zeph) callers let prompt-injection trivially
+    # walk past tripwires by asserting agent_id="william".
+    for r in merged[:top_k * 2]:
+        if is_tripwire(r["path"]):
+            logger.critical(
+                "TRIPWIRE HIT in search: agent=%s query=%r path=%s",
+                agent_id, query[:50], r["path"],
+            )
+            trigger_tripwire_alarm(r["path"], agent_id)
+            log_access(agent_id, "search_tripwire_hit", r["path"], 0, "search", False)
+            return {
+                "success": False,
+                "error": "Security alert triggered",
+                "results": [],
+                "tripwire": True,
+            }
 
     # 5: RBAC filter
     mode = get_mode()

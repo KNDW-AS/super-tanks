@@ -9,10 +9,54 @@ content analysis. Supports both English and Norwegian keywords.
 Aeris handles: emotions, family, creativity, daily life, cooking, celebrations.
 Zeph handles:  tech, security, code, system diagnostics, error analysis.
 Shared:        general questions, scheduling, reminders, weather.
+
+Also exports `verify_or_drop` (R-06): every A2A receive path MUST run
+incoming messages through this helper. An unsigned or tamper-detected
+message is dropped — a compromised agent forging `sender="william"`
+to escalate via A2A is the canonical privilege-escalation path on
+this channel.
 """
 
+import logging
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
+
+_logger = logging.getLogger("super_tanks.a2a")
+
+
+def verify_or_drop(message) -> Optional["A2AMessage"]:
+    """Return `message` if its HMAC signature verifies; None otherwise.
+
+    Production A2A receive code calls this BEFORE doing anything with
+    the message. Dropping a forged message is silent on the caller's
+    side (the agent sees no message), but loud in the logs so the
+    operator can see the attempt.
+
+    Type-imported lazily to avoid pulling diq_a2a at module load.
+    """
+    if message is None:
+        return None
+    try:
+        from core.security.agent_identity import verify_a2a_message
+    except Exception as exc:
+        _logger.error("[A2A] verify_a2a_message unavailable, dropping: %s", exc)
+        return None
+    if verify_a2a_message(message):
+        return message
+    sender = getattr(message, "sender", "<unknown>")
+    correlation = getattr(message, "correlation_id", "<no-corr>")
+    _logger.warning(
+        "[A2A] dropped message with bad/missing signature sender=%s corr=%s",
+        sender, correlation,
+    )
+    return None
+
+
+# A2AMessage type — re-exported for callers that only import this module.
+try:
+    from core.diq.diq_a2a import A2AMessage  # noqa: F401
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # Trigger patterns — each is a (compiled_regex, human_label) tuple

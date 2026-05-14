@@ -95,8 +95,13 @@ class HierarchicalMemoryStore:
 
         target = (self.store_root / clean).with_suffix(".json").resolve()
 
-        # Path traversal guard
-        if not str(target).startswith(str(self.store_root.resolve())):
+        # Path traversal guard. relative_to() raises ValueError if target
+        # isn't inside store_root — the previous startswith() check would
+        # accept sibling directories whose names began with the store
+        # root's path (e.g. .../hierarchical_evil/ vs .../hierarchical/).
+        try:
+            target.relative_to(self.store_root.resolve())
+        except ValueError:
             raise ValueError(
                 f"Path traversal blocked: {memory_path!r} resolved outside store"
             )
@@ -227,8 +232,11 @@ class HierarchicalMemoryStore:
         clean = path.strip("/").replace("\\", "/")
         target_dir = (self.store_root / clean).resolve() if clean else self.store_root.resolve()
 
-        # Safety check
-        if not str(target_dir).startswith(str(self.store_root.resolve())):
+        # Path-traversal guard via relative_to (rejects sibling-dir prefix
+        # attacks that the previous startswith check accepted).
+        try:
+            target_dir.relative_to(self.store_root.resolve())
+        except ValueError:
             raise ValueError(f"Path traversal blocked: {path!r}")
 
         results: List[Dict[str, str]] = []

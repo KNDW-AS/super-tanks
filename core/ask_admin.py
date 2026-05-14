@@ -135,11 +135,17 @@ class ApprovalStore:
         reason: str,
         args: Dict[str, Any],
         ttl_seconds: int = 300
-    ) -> ApprovalRequest:
-        """Create new approval request"""
-        # Hash arguments (privacy-preserving)
+    ) -> Optional[ApprovalRequest]:
+        """Create new approval request. Returns None if persistence fails.
+
+        The args_hash is the full 256-bit SHA-256 hex. The previous
+        truncation to 64 bits (16 hex chars) made deliberate collisions
+        cheap (≈ 2^32 hashes ≈ minutes on commodity hardware) — an
+        attacker could craft args that collide with a previously-approved
+        request and ride the 1h replay window.
+        """
         args_str = json.dumps(args, sort_keys=True)
-        args_hash = hashlib.sha256(args_str.encode()).hexdigest()[:16]
+        args_hash = hashlib.sha256(args_str.encode()).hexdigest()
         args_len = len(args_str)
 
         # Store raw params for display in approval notification.
@@ -149,7 +155,10 @@ class ApprovalStore:
             raw_params = raw_params[:4000] + "\n... (truncated)"
 
         request = ApprovalRequest(
-            request_id=str(uuid.uuid4())[:8],
+            # Full UUID (128 bits) — the previous 8-char truncation (32 bits)
+            # collides at ~65k requests, and INSERT OR REPLACE would silently
+            # overwrite the older row.
+            request_id=str(uuid.uuid4()),
             tool_name=tool_name,
             user_id=user_id,
             reason=reason,
@@ -161,12 +170,24 @@ class ApprovalStore:
             raw_params=raw_params,
         )
 
-        self._save_request(request)
+        if not self._save_request(request):
+            logger.error(
+                f"[ASK_ADMIN] Could not persist request {request.request_id} "
+                f"for {tool_name} — caller must deny the operation"
+            )
+            return None
         logger.info(f"[ASK_ADMIN] Created request {request.request_id} for {tool_name}")
         return request
     
-    def _save_request(self, request: ApprovalRequest):
-        """Save request to database. ZEF v1: BEGIN IMMEDIATE prevents double-spend."""
+    def _save_request(self, request: ApprovalRequest) -> bool:
+        """Persist the request. Returns True on success, False on SQLITE_BUSY.
+
+        Previously this swallowed SQLITE_BUSY silently — callers
+        constructed an ApprovalRequest object that never landed in the
+        DB, dedup broke, and the daemon polling the DB never saw the
+        request. Now the failure is surfaced so create_request can
+        propagate it as a DENY to the caller.
+        """
         import sqlite3
 
         conn = self._get_conn()
@@ -186,13 +207,14 @@ class ApprovalStore:
                 request.raw_params or '{}',
             ))
             conn.commit()
+            return True
         except sqlite3.OperationalError as e:
             logger.error(f"[ZEF v1] _save_request SQLITE_BUSY for {request.request_id}: {e} — DENY")
             try:
                 conn.rollback()
             except Exception:
                 pass
-            # Do NOT re-raise — log and continue per Super Tanks philosophy
+            return False
         finally:
             conn.close()
     
@@ -221,7 +243,7 @@ class ApprovalStore:
         
         # Hash args same way as create
         args_str = json.dumps(args, sort_keys=True)
-        args_hash = hashlib.sha256(args_str.encode()).hexdigest()[:16]
+        args_hash = hashlib.sha256(args_str.encode()).hexdigest()
         
         with self._get_conn() as conn:
             row = conn.execute("""
@@ -252,7 +274,7 @@ class ApprovalStore:
         
         # Hash args same way as create
         args_str = json.dumps(args, sort_keys=True)
-        args_hash = hashlib.sha256(args_str.encode()).hexdigest()[:16]
+        args_hash = hashlib.sha256(args_str.encode()).hexdigest()
         
         cutoff_time = time.time() - max_age_seconds
         
@@ -270,49 +292,99 @@ class ApprovalStore:
         return None
     
     def approve_request(self, request_id: str, admin_id: str) -> bool:
-        """Approve a pending request"""
-        request = self.get_request(request_id)
-        
-        if not request:
-            logger.warning(f"[ASK_ADMIN] Approve failed: request {request_id} not found")
+        """Approve a pending request atomically.
+
+        Uses a single conditional UPDATE so two admins clicking approve/deny
+        in the same millisecond can't both pass the status check and
+        overwrite each other.
+        """
+        import sqlite3
+
+        now = time.time()
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE approval_requests "
+                "SET status=?, resolved_at=?, resolved_by=? "
+                "WHERE request_id=? AND status=? AND expires_at>?",
+                (ApprovalStatus.APPROVED.value, now, admin_id,
+                 request_id, ApprovalStatus.PENDING.value, now),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                logger.warning(
+                    f"[ASK_ADMIN] Approve failed: request {request_id} "
+                    f"not pending or already expired"
+                )
+                return False
+            logger.info(f"[ASK_ADMIN] Approved request {request_id} by {admin_id}")
+            return True
+        except sqlite3.OperationalError as e:
+            logger.error(f"[ZEF v1] approve_request SQLITE_BUSY for {request_id}: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return False
-        
-        if request.status != ApprovalStatus.PENDING:
-            logger.warning(f"[ASK_ADMIN] Approve failed: request {request_id} is {request.status.value}")
-            return False
-        
-        if request.is_expired():
-            logger.warning(f"[ASK_ADMIN] Approve failed: request {request_id} expired")
-            return False
-        
-        request.status = ApprovalStatus.APPROVED
-        request.resolved_at = time.time()
-        request.resolved_by = admin_id
-        
-        self._save_request(request)
-        logger.info(f"[ASK_ADMIN] Approved request {request_id} by {admin_id}")
-        return True
-    
+        finally:
+            conn.close()
+
     def deny_request(self, request_id: str, admin_id: str) -> bool:
-        """Deny a pending request"""
-        request = self.get_request(request_id)
-        
-        if not request:
-            logger.warning(f"[ASK_ADMIN] Deny failed: request {request_id} not found")
+        """Deny a pending request atomically (see approve_request)."""
+        import sqlite3
+
+        now = time.time()
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE approval_requests "
+                "SET status=?, resolved_at=?, resolved_by=? "
+                "WHERE request_id=? AND status=?",
+                (ApprovalStatus.DENIED.value, now, admin_id,
+                 request_id, ApprovalStatus.PENDING.value),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                logger.warning(
+                    f"[ASK_ADMIN] Deny failed: request {request_id} not pending"
+                )
+                return False
+            logger.info(f"[ASK_ADMIN] Denied request {request_id} by {admin_id}")
+            return True
+        except sqlite3.OperationalError as e:
+            logger.error(f"[ZEF v1] deny_request SQLITE_BUSY for {request_id}: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return False
-        
-        if request.status != ApprovalStatus.PENDING:
-            logger.warning(f"[ASK_ADMIN] Deny failed: request {request_id} is {request.status.value}")
-            return False
-        
-        request.status = ApprovalStatus.DENIED
-        request.resolved_at = time.time()
-        request.resolved_by = admin_id
-        
-        self._save_request(request)
-        logger.info(f"[ASK_ADMIN] Denied request {request_id} by {admin_id}")
-        return True
+        finally:
+            conn.close()
     
+    def list_pending(self, limit: int = 100) -> list:
+        """Return all pending approval requests, oldest first.
+
+        The canonical "what needs admin attention" query. Supersedes
+        go_gate_approval_daemon.get_pending_transactions, which read
+        from a parallel go_transactions table that's now
+        legacy-compat only.
+        """
+        import sqlite3
+
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT request_id, tool_name, user_id, reason, args_hash, "
+                "args_len, status, created_at, expires_at, resolved_at, "
+                "resolved_by, raw_params "
+                "FROM approval_requests "
+                "WHERE status=? AND expires_at>? "
+                "ORDER BY created_at ASC LIMIT ?",
+                (ApprovalStatus.PENDING.value, time.time(), limit),
+            ).fetchall()
+            return [self._row_to_request(r) for r in rows]
+
     def expire_old_requests(self) -> int:
         """Mark expired requests and return count. ZEF v1: BEGIN IMMEDIATE."""
         import sqlite3
@@ -423,7 +495,10 @@ def check_tool_permission(
         args=args,
         ttl_seconds=ttl
     )
-    
+    if request is None:
+        # Persistence failed — fail closed.
+        return False, None, "APPROVAL_STORE_UNAVAILABLE"
+
     return False, request.request_id, "PAUSED_FOR_APPROVAL"
 
 
@@ -547,6 +622,7 @@ def ask_admin_iron_link(
     import concurrent.futures
     
     def send_via_zeph():
+        loop = None
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -559,7 +635,8 @@ def ask_admin_iron_link(
                 raw_params=request.raw_params,
             ))
         finally:
-            loop.close()
+            if loop is not None:
+                loop.close()
     
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:

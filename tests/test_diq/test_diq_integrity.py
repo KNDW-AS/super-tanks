@@ -55,9 +55,10 @@ class TestComputeChecksums:
 # ── verify_diq_integrity ───────────────────────────────────────────────────
 
 class TestVerifyDiqIntegrity:
-    def test_missing_manifest_is_tolerated(self, scratch):
-        # No checksums file → log warning, do not raise.
-        di.verify_diq_integrity()
+    def test_missing_manifest_raises(self, scratch):
+        # Missing manifest is indistinguishable from tampering — fail closed.
+        with pytest.raises(RuntimeError, match="not found"):
+            di.verify_diq_integrity()
 
     def test_sealed_files_verify_cleanly(self, scratch):
         di.write_checksums()

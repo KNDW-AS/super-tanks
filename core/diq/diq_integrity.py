@@ -60,11 +60,15 @@ def verify_diq_integrity() -> None:
     (first-boot scenario — run write_checksums() to seal).
     """
     if not _CHECKSUMS_FILE.exists():
-        logger.warning(
-            "DIQ_CHECKSUMS.json not found — DIQ contracts not yet sealed. "
-            "Run diq_integrity.write_checksums() to seal after validation."
+        # A missing manifest is indistinguishable from tampering — an
+        # attacker who can rm DIQ_CHECKSUMS.json would otherwise defeat
+        # the integrity check entirely. First-boot must run
+        # diq_integrity.write_checksums() explicitly to seal.
+        raise RuntimeError(
+            "DIQ_CHECKSUMS.json not found — refusing to start. "
+            "Run diq_integrity.write_checksums() once after validating "
+            "the frozen contract files."
         )
-        return
 
     expected: Dict[str, str] = json.loads(_CHECKSUMS_FILE.read_text())
     failures = []

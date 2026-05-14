@@ -5,7 +5,10 @@ Super Tanks Dual Mode Controller — LOCKDOWN / AUTONOMOUS toggle.
 
 Features:
 - Timed autonomy: AUTONOMOUS falls back to LOCKDOWN after timeout
-- Night mode: reduced autonomy after 23:00 + 2h inactivity
+- Night mode: reduced autonomy after 21:00 + 2h inactivity (start_hour
+  in NIGHT_MODE_CONFIG; end_hour=06:00). Only activates when system is
+  in AUTONOMOUS — flipping back to LOCKDOWN drops night-mode gating
+  along with the rest of autonomous behaviour.
 - Trust-aware GO-Gate roles
 - Persist/restore across restarts
 
@@ -16,10 +19,12 @@ INVARIANTS (never change regardless of mode):
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from enum import Enum
 from datetime import datetime, timezone
+from typing import Optional
 
 logger = logging.getLogger("super_tanks.mode")
 
@@ -29,6 +34,13 @@ STATE_FILE = Path(__file__).resolve().parent.parent.parent / "config" / "super_t
 class TankMode(Enum):
     LOCKDOWN = "lockdown"
     AUTONOMOUS = "autonomous"
+
+
+class StaleBaselineError(RuntimeError):
+    """Raised when AUTONOMOUS is requested but the ZEF baseline does not
+    cover the current upstream model tier. Operator must run the redteam
+    corpus against the new tier and call `mark_zef_baselined()` first.
+    """
 
 
 MODE_CONFIG = {
@@ -77,7 +89,97 @@ NIGHT_MODE_CONFIG = {
     ],
 }
 
+# ── Upstream model-tier tracking ──
+# When the upstream Claude / Gemini / etc. ships a new tier
+# (e.g. Mythos-class), the ZEF false-positive/false-negative
+# baseline measured against the old tier no longer applies. Force
+# a re-baseline before allowing AUTONOMOUS, otherwise we'd grant
+# wider autonomy to a model whose refusal training is uncalibrated
+# against our filter.
+#
+# Production callers update _MODEL_TIER_FINGERPRINT (an opaque
+# string like "claude-mythos-2026-04") whenever they detect a new
+# upstream model in BRAIN_CONFIG. A mismatch with the last-baselined
+# fingerprint forces set_mode(AUTONOMOUS) to refuse with a clear error.
+
+_MODEL_TIER_FINGERPRINT: Optional[str] = None
+_LAST_BASELINED_TIER: Optional[str] = None
+
+ZEF_BASELINE_FILE = Path(__file__).resolve().parent.parent.parent / "config" / "zef_baseline.json"
+
+
+def set_current_model_tier(fingerprint: str) -> None:
+    """Production hook: call when the upstream LLM provider changes.
+
+    The bootstrap reads ST_UPSTREAM_MODEL and feeds it here. A live
+    LLM client should also call this on model swap so AUTONOMOUS
+    cannot survive an upgrade without re-baselining.
+    """
+    global _MODEL_TIER_FINGERPRINT
+    with _state_lock:
+        _MODEL_TIER_FINGERPRINT = fingerprint
+
+
+def mark_zef_baselined(fingerprint: str) -> None:
+    """Call after running the ZEF redteam corpus against a new tier
+    and confirming the FPR/block-rate floor still holds.
+
+    Persists to ZEF_BASELINE_FILE so the baseline survives restarts —
+    otherwise every reboot would block AUTONOMOUS until the operator
+    re-ran the corpus, which is operationally hostile.
+    """
+    global _LAST_BASELINED_TIER
+    with _state_lock:
+        _LAST_BASELINED_TIER = fingerprint
+    _persist_zef_baseline(fingerprint)
+
+
+def _persist_zef_baseline(fingerprint: str) -> None:
+    payload = {
+        "fingerprint": fingerprint,
+        "baselined_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        ZEF_BASELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ZEF_BASELINE_FILE.write_text(json.dumps(payload, indent=2))
+    except Exception as e:
+        logger.error("Failed to persist ZEF baseline: %s", e)
+
+
+def load_zef_baseline() -> Optional[str]:
+    """Read persisted baseline (called from bootstrap)."""
+    global _LAST_BASELINED_TIER
+    if not ZEF_BASELINE_FILE.exists():
+        return None
+    try:
+        data = json.loads(ZEF_BASELINE_FILE.read_text())
+        fp = data.get("fingerprint")
+        if fp:
+            with _state_lock:
+                _LAST_BASELINED_TIER = fp
+        return fp
+    except Exception as e:
+        logger.error("Failed to load ZEF baseline: %s", e)
+        return None
+
+
+def needs_rebaseline() -> bool:
+    """True if the upstream tier has changed since the last baseline."""
+    with _state_lock:
+        if _MODEL_TIER_FINGERPRINT is None:
+            # Not yet set — assume legacy / pre-Mythos.
+            return False
+        return _LAST_BASELINED_TIER != _MODEL_TIER_FINGERPRINT
+
+
 # ── State ──
+# Module-level globals serialised by _state_lock. A request crossing a
+# mode-switch boundary previously could see _current_mode=AUTONOMOUS
+# alongside _autonomous_timeout_at=0 (mid-write) and apply the wrong
+# RBAC. The lock makes "mode + timeout" reads/writes mutually
+# exclusive. RLock so set_mode can call get_mode_config() without
+# self-deadlocking.
+_state_lock = threading.RLock()
 _current_mode: TankMode = TankMode.LOCKDOWN
 _autonomous_started_at: float = 0
 _autonomous_timeout_at: float = 0
@@ -87,30 +189,46 @@ _last_interaction: float = time.time()
 
 
 def get_mode() -> TankMode:
-    return _current_mode
+    with _state_lock:
+        return _current_mode
 
 
 def get_mode_config() -> dict:
-    return dict(MODE_CONFIG[_current_mode])
+    with _state_lock:
+        return dict(MODE_CONFIG[_current_mode])
 
 
 def get_config_value(key: str):
-    return MODE_CONFIG[_current_mode].get(key)
+    with _state_lock:
+        return MODE_CONFIG[_current_mode].get(key)
 
 
 def get_effective_gogate_roles(agent_id: str) -> list:
-    """GO-Gate roles considering mode + trust level."""
-    base_roles = MODE_CONFIG[_current_mode].get("gogate_required_roles", ["ADMIN"])
+    """GO-Gate roles considering mode + trust level.
+
+    If the trust subsystem is unavailable we fall back to the base
+    role list and log loudly. The previous silent swallow meant a
+    probation-level agent might have its trust escalation bypass go
+    unnoticed when trust_score was down.
+    """
+    with _state_lock:
+        base_roles = MODE_CONFIG[_current_mode].get("gogate_required_roles", ["ADMIN"])
+        current_mode_snapshot = _current_mode
     try:
         from core.security.trust_score import get_score
         trust = get_score(agent_id)
         level = trust["level"]
         if level == "probation":
             return ["WRITE", "EXEC", "ADMIN"]
-        if level == "junior" and _current_mode == TankMode.AUTONOMOUS:
+        if level == "junior" and current_mode_snapshot == TankMode.AUTONOMOUS:
             return ["WRITE", "EXEC", "ADMIN"]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error(
+            "[MODE] trust_score lookup failed for agent=%s; falling back "
+            "to base roles. This means probation/junior trust escalation "
+            "is NOT being applied. Investigate immediately. (%s)",
+            agent_id, exc,
+        )
     return base_roles
 
 
@@ -124,34 +242,57 @@ def requires_approval(tool_role: str, agent_id: str = "aeris") -> bool:
 def set_mode(new_mode: TankMode, timeout_hours: int = 8) -> dict:
     global _current_mode, _autonomous_started_at, _autonomous_timeout_at, _timeout_hours, _night_mode_active
 
-    old_mode = _current_mode
-    _current_mode = new_mode
-
-    if new_mode == TankMode.AUTONOMOUS:
-        _autonomous_started_at = time.time()
-        _timeout_hours = timeout_hours
-        _autonomous_timeout_at = _autonomous_started_at + (timeout_hours * 3600)
-        _night_mode_active = False
-        logger.warning(
-            "AUTONOMOUS aktivert — timeout om %d timar (kl %s)",
-            timeout_hours, _format_time(_autonomous_timeout_at),
+    # Tier-rebaseline gate: never grant AUTONOMOUS to a model whose
+    # tier hasn't been re-tested against the ZEF redteam corpus. The
+    # check happens BEFORE we acquire _state_lock for the mutation
+    # path so the error message can quote the two fingerprints; the
+    # read inside `needs_rebaseline()` takes the lock itself.
+    if new_mode == TankMode.AUTONOMOUS and needs_rebaseline():
+        raise StaleBaselineError(
+            f"AUTONOMOUS refused: ZEF baseline covers "
+            f"{_LAST_BASELINED_TIER!r} but upstream tier is "
+            f"{_MODEL_TIER_FINGERPRINT!r}. Run the redteam corpus "
+            f"and call mark_zef_baselined() before re-attempting."
         )
-    else:
-        _autonomous_started_at = 0
-        _autonomous_timeout_at = 0
-        _night_mode_active = False
 
-    _persist_state(old_mode, new_mode)
+    with _state_lock:
+        old_mode = _current_mode
+        _current_mode = new_mode
 
-    # Audit
+        if new_mode == TankMode.AUTONOMOUS:
+            _autonomous_started_at = time.time()
+            _timeout_hours = timeout_hours
+            _autonomous_timeout_at = _autonomous_started_at + (timeout_hours * 3600)
+            _night_mode_active = False
+            logger.warning(
+                "AUTONOMOUS aktivert — timeout om %d timar (kl %s)",
+                timeout_hours, _format_time(_autonomous_timeout_at),
+            )
+        else:
+            _autonomous_started_at = 0
+            _autonomous_timeout_at = 0
+            _night_mode_active = False
+
+        _persist_state(old_mode, new_mode)
+
+    # Audit. Previously this imported core.audit_store, a module that
+    # doesn't exist in this codebase, then swallowed the ImportError —
+    # so every mode change (including tripwire-forced LOCKDOWN) ran
+    # un-audited. Use the real memory audit log instead.
     try:
-        from core.audit_store import get_audit_store
-        get_audit_store().log_audit(
-            agent="boss", action="super_tanks_mode_change", outcome="success",
-            details=f"{old_mode.value} -> {new_mode.value} (timeout={timeout_hours}h)",
+        from core.memory.audit_log import log_access
+        log_access(
+            agent_id="boss",
+            operation="MODE_CHANGE",
+            path=f"{old_mode.value}->{new_mode.value}",
+            detail_level=-1,
+            mode=new_mode.value,
+            accessible=True,
+            trajectory=f"timeout={timeout_hours}h",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("[MODE] Audit write failed for %s->%s: %s",
+                     old_mode.value, new_mode.value, exc)
 
     _notify_mode_change(old_mode, new_mode)
     return get_mode_config()

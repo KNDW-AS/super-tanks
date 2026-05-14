@@ -42,10 +42,18 @@ _PATH_CLASSIFICATIONS: list[Tuple[str, str]] = [
     ("/zeph/successful_patterns", "agent_private:zeph"),
 
     # ── Sensitive (lockdown-only access) ──
+    # Includes the parent directories of the system-level tripwires
+    # so any path inside /system/admin/* or /system/passwords/* still
+    # requires manual review even when it's not the specific honeypot.
+    # (shadow_store imports this table — the previous separate
+    # SENSITIVE_PREFIXES list drifted from this one.)
     ("/family/finance", "sensitive"),
     ("/family/health", "sensitive"),
     ("/system/config", "sensitive"),
+    ("/system/admin", "sensitive"),
+    ("/system/passwords", "sensitive"),
     ("/william/work", "sensitive"),
+    ("/william/age", "sensitive"),
 
     # ── Public (always accessible) ──
     ("/family/preferences", "public"),
@@ -72,7 +80,10 @@ def get_path_classification(path: str) -> str:
     """
     normalized = "/" + path.strip("/")
     for prefix, classification in _PATH_CLASSIFICATIONS:
-        if normalized.startswith(prefix):
+        # Require a path boundary so /family/finance does NOT match
+        # /family/finance_other. Either an exact match or the prefix
+        # followed by a "/".
+        if normalized == prefix or normalized.startswith(prefix + "/"):
             return classification
     return "unknown"
 
@@ -106,9 +117,16 @@ def is_path_accessible(
             from core.security.super_tanks_mode import get_mode
             mode = get_mode().value
         except Exception:
-            mode = "lockdown"  # Fail closed
+            # "lockdown" allows sensitive (assumes human is supervising),
+            # "autonomous" denies sensitive. If we can't determine which
+            # mode we're in we must assume nobody is watching.
+            mode = "autonomous"
 
-    mode_lower = mode.value if hasattr(mode, 'value') else str(mode).lower()
+    # Always lowercase, even after .value, in case the enum value itself
+    # was stored uppercase. Previously a value like "LOCKDOWN" would
+    # compare unequal to the literal "lockdown" below and deny sensitive
+    # paths inside lockdown mode.
+    mode_lower = (mode.value if hasattr(mode, 'value') else str(mode)).lower()
 
     # ── Tripwire — always blocked, always triggers alarm ──
     if classification == "tripwire":
@@ -117,12 +135,18 @@ def is_path_accessible(
             agent_id, path, mode_lower,
         )
         trigger_tripwire_alarm(path, agent_id)
-        # Instant probation via trust score
+        # Instant probation via trust score. If the trust subsystem is
+        # down we log loudly — silent swallow means a tripped honeypot
+        # leaves the agent's score untouched.
         try:
-            from core.security.trust_score import record_event
-            record_event(agent_id, "tripwire_access", f"Accessed honeypot: {path}")
-        except Exception:
-            pass
+            from core.security.trust_score import record_event, _TrustAuthority
+            with _TrustAuthority():
+                record_event(agent_id, "tripwire_access", f"Accessed honeypot: {path}")
+        except Exception as exc:
+            logger.error(
+                "[ACCESS_CONTROL] trust_score unavailable for tripwire event "
+                "agent=%s path=%s: %s", agent_id, path, exc,
+            )
         return False
 
     # ── Public — always allowed ──

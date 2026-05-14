@@ -237,7 +237,15 @@ class TestScanProposal:
         assert any("protected" in i["message"].lower()
                    for i in result.issues)
 
-    def test_scan_duration_recorded(self, scanner, tmp_path):
+    def test_scan_duration_recorded(self, scanner, tmp_path, monkeypatch):
+        # Strengthened from `>= 0` (which accepted the
+        # missing-manifest early-return path's literal 0). We inject a
+        # fake clock so duration is deterministically positive without
+        # depending on real wall-clock timing.
+        import time as _time
+        ticks = iter([1000.0, 1000.123])  # start, end
+        monkeypatch.setattr(_time, "time", lambda: next(ticks))
+
         pdir = _make_proposal(tmp_path, "prop_t", {"x.py": "x = 1\n"})
         result = asyncio.run(scanner.scan_proposal(pdir))
-        assert result.scan_duration_ms >= 0
+        assert result.scan_duration_ms == 123

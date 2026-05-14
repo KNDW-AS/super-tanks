@@ -269,13 +269,19 @@ class TestGetAllPaths:
 # ── Thread safety ──────────────────────────────────────────────────────────
 
 class TestThreadSafety:
-    def test_concurrent_writes_do_not_corrupt_file(self, store):
+    def test_concurrent_writes_yield_coherent_last_writer_wins(self, store):
+        # The weaker version of this test accepted any final state — even
+        # a frankenfile with l0 from writer A, l1 from writer B, and l2
+        # from writer C would pass `startswith("abs")`. Strengthen: each
+        # writer tags all three fields with its own id; the final file
+        # must have all three fields come from the SAME writer.
         N = 30
         errors = []
 
         def writer(i):
             try:
-                store.store("/shared", f"abs{i}", f"ov{i}", {"i": i})
+                store.store("/shared",
+                            f"abs-{i}", f"ov-{i}", {"writer": i})
             except Exception as e:
                 errors.append(e)
 
@@ -286,11 +292,13 @@ class TestThreadSafety:
             t.join()
 
         assert not errors
-        # Final file must be valid JSON and contain a coherent record.
         m = store.read("/shared")
         assert m is not None
-        assert m.l0_abstract.startswith("abs")
-        assert m.metadata["access_count"] >= 1
+        # All three payload fields must come from the SAME final writer
+        # — otherwise we'd have an interleaved write.
+        winner = m.l2_full["writer"]
+        assert m.l0_abstract == f"abs-{winner}"
+        assert m.l1_overview == f"ov-{winner}"
 
     def test_concurrent_reads_during_writes_yield_valid_or_none(self, store):
         store.store("/k", "a", "b", "c")

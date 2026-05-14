@@ -17,6 +17,7 @@ Flow:
 
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -28,11 +29,17 @@ logger = logging.getLogger("super_tanks.memory.shadow")
 
 SHADOW_DB = Path(__file__).resolve().parent.parent.parent / "data" / "shadow_proposals.db"
 
-# Paths that always require manual review
-SENSITIVE_PREFIXES = [
-    "/william/age", "/family/health", "/family/finance",
-    "/system/config", "/system/passwords", "/system/admin",
-]
+# Single source of truth for path classification lives in
+# core.memory.access_control. Anything classified as "sensitive" or
+# "tripwire" requires manual shadow review here. The previous
+# SENSITIVE_PREFIXES list was a parallel copy that drifted out of sync
+# with the classification table (e.g. it had /system/admin while
+# access_control had only /system/admin_keys, so shadow_store and
+# access_control disagreed on /system/admin/something).
+
+
+_initialised: bool = False
+_init_lock = threading.RLock()
 
 
 def _get_conn():
@@ -40,7 +47,24 @@ def _get_conn():
     conn = open_db(str(SHADOW_DB), timeout=15, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
+    _ensure_db()
     return conn
+
+
+def _ensure_db() -> None:
+    """Idempotent schema bootstrap on first DB use."""
+    global _initialised
+    if _initialised:
+        return
+    with _init_lock:
+        if _initialised:
+            return
+        _initialised = True
+        try:
+            _init_db()
+        except Exception:
+            _initialised = False
+            raise
 
 
 def _init_db():
@@ -71,7 +95,7 @@ def _init_db():
     conn.close()
 
 
-_init_db()
+# Schema is created lazily on first _get_conn() call (see _ensure_db).
 
 
 def propose(
@@ -114,10 +138,20 @@ def propose(
     except Exception:
         pass
 
-    # Auto-approve rules
+    # Auto-approve rules. Confidence is agent-supplied, so it cannot
+    # on its own be a permission gate — a compromised agent would
+    # simply assert confidence=0.99 to memory-poison Aeris's worldview.
+    # We keep the auto-approve window only for non-sensitive create
+    # operations on the agent's own private namespace (where the worst
+    # case is the agent corrupting its own memory). Everything else
+    # requires manual review.
     status = "pending"
     auto_approve_at = None
     reason = None
+
+    def _is_agent_private(p: str, agent: str) -> bool:
+        from core.memory.access_control import get_path_classification
+        return get_path_classification(p) == f"agent_private:{agent}"
 
     if confidence < 0.5:
         status = "auto_rejected"
@@ -128,11 +162,20 @@ def propose(
     elif operation == "update":
         status = "pending"
         reason = "Correction of existing fact — requires manual review"
-    elif operation == "create" and confidence >= 0.8:
-        # Auto-approve new entries with high confidence after 24h
+    elif (operation == "create"
+          and confidence >= 0.8
+          and _is_agent_private(path, agent_id)):
+        # Auto-approve high-confidence creates ONLY in the agent's own
+        # private namespace. The agent self-pollutes at worst; family
+        # / system memory is never auto-mutated on agent assertion.
         auto_approve_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
         status = "pending"
-        reason = f"New entry, confidence {confidence:.1f} — auto-approve in 24h"
+        reason = (f"New entry in own namespace, confidence {confidence:.1f} "
+                  f"— auto-approve in 24h")
+    else:
+        # Default: human reviews. Memory writes to public or other
+        # agents' namespaces are not auto-approved on agent assertion.
+        reason = "Outside agent's private namespace — requires manual review"
 
     conn = _get_conn()
     try:
@@ -296,16 +339,25 @@ def process_auto_approvals() -> int:
 
 
 def expire_old_proposals() -> int:
-    """Expire proposals older than their TTL."""
+    """Expire proposals older than their TTL.
+
+    SQLite's datetime() function returns 'YYYY-MM-DD HH:MM:SS' (space
+    separator, no microseconds, no offset). Passing
+    datetime.now(timezone.utc).isoformat() ('2024-01-15T12:30:45.12+00:00')
+    as the right-hand side meant lexicographic comparison crossed the
+    space-vs-T-vs-offset boundary inconsistently — at some date
+    boundaries nothing expired. Format the now-string to match
+    SQLite's so the comparison is plain string order.
+    """
     conn = _get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        now = datetime.now(timezone.utc)
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute("""
             UPDATE shadow_proposals SET status='expired'
             WHERE status='pending'
             AND datetime(created_at, '+' || ttl_days || ' days') < ?
-        """, (now.isoformat(),))
+        """, (now_str,))
         affected = conn.execute("SELECT changes()").fetchone()[0]
         conn.commit()
         if affected:
@@ -316,5 +368,7 @@ def expire_old_proposals() -> int:
 
 
 def _is_sensitive_path(path: str) -> bool:
-    normalized = "/" + path.strip("/")
-    return any(normalized.startswith(p) for p in SENSITIVE_PREFIXES)
+    """True if access_control would classify this path as sensitive or
+    tripwire — either requires manual review here."""
+    from core.memory.access_control import get_path_classification
+    return get_path_classification(path) in ("sensitive", "tripwire")

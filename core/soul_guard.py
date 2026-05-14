@@ -74,9 +74,14 @@ def check_soul_integrity() -> Tuple[bool, str]:
     global SOUL_SAFE_MODE, SOUL_SAFE_MODE_REASON
 
     if not INTEGRITY_FILE.exists():
-        msg = "[SOUL_GUARD] soul_integrity.json not found — skipping check"
-        logger.warning(msg)
-        return True, msg
+        # A missing manifest is indistinguishable from an attacker who
+        # deleted it to silence the integrity check. Treat as tampering.
+        msg = ("[SOUL_GUARD] soul_integrity.json missing — entering SAFE MODE. "
+               "Run the soul-sealing tool to (re)generate the manifest.")
+        logger.critical(msg)
+        SOUL_SAFE_MODE = True
+        SOUL_SAFE_MODE_REASON = msg
+        return False, msg
 
     try:
         with open(INTEGRITY_FILE, "r") as f:
@@ -140,6 +145,26 @@ def check_soul_integrity() -> Tuple[bool, str]:
 
     logger.info("[SOUL_GUARD] All soul files verified ✅")
     return True, "ok"
+
+
+def enter_safe_mode(reason: str) -> None:
+    """Trip SAFE_MODE from outside soul integrity (e.g. when the
+    threat monitor detects audit-chain tampering). Idempotent —
+    second call updates the reason but doesn't double-notify."""
+    global SOUL_SAFE_MODE, SOUL_SAFE_MODE_REASON
+    already = SOUL_SAFE_MODE
+    SOUL_SAFE_MODE = True
+    SOUL_SAFE_MODE_REASON = reason
+    if not already:
+        logger.critical("[SOUL_GUARD] SAFE_MODE entered: %s", reason)
+        try:
+            _send_telegram_alert(
+                "🚨 *SAFE MODE entered by threat monitor*\n\n"
+                f"```\n{reason}\n```\n\n"
+                "Investigate before resuming."
+            )
+        except Exception as exc:
+            logger.error("[SOUL_GUARD] alert send failed: %s", exc)
 
 
 def is_safe_mode() -> bool:

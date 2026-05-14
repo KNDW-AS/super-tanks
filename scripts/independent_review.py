@@ -130,21 +130,18 @@ def analyze_gogate(agent_id: str, since: str) -> dict:
         return {"status": "db_missing", "approval_rate": None}
 
     try:
-        # approval_requests uses user_id as the agent or requester
+        # approval_requests uses user_id as the agent or requester.
+        # NB: The previous code fell back to an un-filtered query when
+        # the agent had zero rows, then attributed every other agent's
+        # approvals to the current one — producing identical scores for
+        # all agents. Drop the fallback so missing data is reported as
+        # missing.
         rows = _safe_query(
             conn,
             "SELECT status FROM approval_requests "
             "WHERE user_id = ? AND created_at >= ?",
             (agent_id, since),
         )
-        if not rows:
-            # Also try without user_id filter (some systems use tool_name for tracking)
-            rows = _safe_query(
-                conn,
-                "SELECT status FROM approval_requests WHERE created_at >= ?",
-                (since,),
-            )
-
         if not rows:
             return {"status": "no_data", "approval_rate": None, "total": 0}
 

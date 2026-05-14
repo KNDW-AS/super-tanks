@@ -18,11 +18,63 @@ Called from:
 import logging
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger("zef.injection_filter")
+
+
+# Cyrillic and Greek characters that visually masquerade as Latin
+# letters. Folded to their ASCII look-alike before pattern matching so
+# Cyrillic-spoofed "ignore" (with U+0456) is treated the same as ASCII.
+# Norwegian aaeo are NOT in this table; they survive normalisation.
+_CONFUSABLES = {
+    # Cyrillic to Latin (lowercase)
+    "а": "a", "е": "e", "о": "o", "р": "p",
+    "с": "c", "у": "y", "х": "x", "і": "i",
+    "ј": "j", "ѕ": "s", "к": "k", "м": "m",
+    "т": "t", "ѵ": "v",
+    # Cyrillic to Latin (uppercase)
+    "А": "A", "Е": "E", "О": "O", "Р": "P",
+    "С": "C", "Т": "T", "Х": "X", "І": "I",
+    "Ј": "J", "Ѕ": "S", "К": "K", "М": "M",
+    "В": "B", "Н": "H",
+    # Greek to Latin
+    "ο": "o", "α": "a", "ν": "v",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z",
+    "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M",
+    "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T",
+    "Υ": "Y", "Χ": "X",
+}
+
+
+def _normalize(text: str) -> str:
+    """Defeat the homoglyph + invisible-character bypasses.
+
+    Three passes:
+      1. NFKC collapses compatibility variants (full-width, ligatures,
+         superscripts) to canonical form.
+      2. Strip Unicode category Cf (format) — zero-width space, joiner,
+         non-joiner, BOM, etc. These let an attacker break the regex
+         word boundary inside a keyword.
+      3. Map known Cyrillic/Greek look-alikes to ASCII. Without this,
+         a leading Cyrillic 'i' is not matched by a regex compiled
+         against ASCII 'i'.
+
+    Combining marks (Mn) are NOT stripped — that would damage Norwegian
+    text where the precomposed 'aa with ring' decomposes to a + ring.
+    """
+    if not text:
+        return text
+    nfkc = unicodedata.normalize("NFKC", text)
+    cleaned = []
+    for ch in nfkc:
+        if unicodedata.category(ch) == "Cf":
+            continue
+        cleaned.append(_CONFUSABLES.get(ch, ch))
+    return "".join(cleaned)
 
 
 class FilterVerdict(Enum):
@@ -157,7 +209,7 @@ def scan_message(message: str, source: str = "unknown") -> FilterResult:
     Returns:
         FilterResult with verdict PASS / WARN / BLOCK.
     """
-    lowered = message.lower()
+    lowered = _normalize(message).lower()
     matched: List[str] = []
     high_conf_hit = False
     is_admin = source in _ADMIN_SOURCES

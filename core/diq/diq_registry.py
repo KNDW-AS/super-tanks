@@ -77,9 +77,49 @@ def all_skills() -> Dict[str, DIQSkill]:
 _a2a_channel: Optional[DIQA2AChannel] = None
 
 
+class _VerifyingA2AChannel(DIQA2AChannel):
+    """Wraps a registered A2A channel so every receive() output is
+    re-verified through `escalation_rules.verify_or_drop` before it
+    can reach the agent runtime. R-06: a forged-sender A2A message is
+    the canonical privilege escalation path on this bus, so the gate
+    must sit at the registration boundary — individual channel
+    implementations are not trusted to enforce it themselves.
+
+    `send` and `broadcast` pass through unchanged; sender-side signing
+    happens in `core.security.agent_identity.sign_a2a_message` at the
+    callsite that builds the message.
+    """
+
+    def __init__(self, inner: DIQA2AChannel):
+        self._inner = inner
+
+    async def send(self, message):
+        return await self._inner.send(message)
+
+    async def receive(self, agent_id: str):
+        from core.a2a.escalation_rules import verify_or_drop
+        return verify_or_drop(await self._inner.receive(agent_id))
+
+    async def receive_all(self, agent_id: str):
+        from core.a2a.escalation_rules import verify_or_drop
+        msgs = await self._inner.receive_all(agent_id)
+        return [m for m in (verify_or_drop(msg) for msg in msgs) if m is not None]
+
+    async def broadcast(self, sender: str, payload):
+        return await self._inner.broadcast(sender, payload)
+
+
 def register_a2a(channel: DIQA2AChannel) -> None:
+    """Register an A2A channel. The channel is wrapped in
+    `_VerifyingA2AChannel` so unsigned/forged messages are dropped
+    before they reach the recipient's policy logic.
+    """
     global _a2a_channel
-    _a2a_channel = channel
+    if isinstance(channel, _VerifyingA2AChannel):
+        # Already wrapped — don't double-wrap.
+        _a2a_channel = channel
+    else:
+        _a2a_channel = _VerifyingA2AChannel(channel)
 
 
 def get_a2a() -> Optional[DIQA2AChannel]:
