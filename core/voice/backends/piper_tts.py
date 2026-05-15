@@ -26,18 +26,27 @@ Operators wire the binary path + model dir via env vars:
 Without those, every call returns False and logs a single line — the
 pipeline will fall back to Telegram so the user is never silently
 ignored.
+
+Voice ids follow `<base>#<speaker_idx>` where the index is optional.
+For multi-speaker Piper models, the index picks one of the trained
+voices (e.g. Aeris on speaker 0, Zeph on speaker 1). For single-
+speaker models the suffix keeps the voice_id string distinct in
+audit logs but the audio is identical — the resolver logs a warning
+so operators know to import a multi-speaker model if they need the
+voices to actually sound different.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shlex
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.diq.diq_voice import DIQVoiceTTS, Utterance
 
@@ -69,13 +78,16 @@ class PiperTTSBackend(DIQVoiceTTS):
                 utterance.text[:80],
             )
             return False
-        model_path = self._resolve_model_path(utterance.voice_id)
-        if model_path is None:
+        resolved = self._resolve_model(utterance.voice_id)
+        if resolved is None:
             logger.error("[PIPER] unknown voice_id %r in %s",
                          utterance.voice_id, self.model_dir)
             return False
+        model_path, speaker_idx = resolved
         try:
-            wav_path = await self._synthesise(utterance.text, model_path)
+            wav_path = await self._synthesise(
+                utterance.text, model_path, speaker_idx,
+            )
         except Exception as exc:
             logger.error("[PIPER] synthesise failed: %s", exc)
             return False
@@ -87,17 +99,74 @@ class PiperTTSBackend(DIQVoiceTTS):
             except Exception:
                 pass
 
-    def _resolve_model_path(self, voice_id: str) -> "Path | None":
-        # voice_id forms: "no_NO-talesyntese-medium" or
-        # "no_NO-talesyntese-medium#1" (speaker idx).
-        base = voice_id.split("#", 1)[0]
-        candidate = Path(self.model_dir) / f"{base}.onnx"
-        return candidate if candidate.exists() else None
+    def _resolve_model(
+            self, voice_id: str,
+    ) -> Optional[Tuple[Path, int]]:
+        """Return (model_path, speaker_idx) or None if the model file
+        is missing.
 
-    async def _synthesise(self, text: str, model_path: Path) -> str:
+        voice_id forms:
+            "no_NO-talesyntese-medium"      -> idx=0
+            "no_NO-talesyntese-medium#1"    -> idx=1
+
+        If the parsed idx exceeds the model's num_speakers, the resolver
+        clamps to 0 and logs a warning so identical-sounding voices in
+        a single-speaker model don't fail closed — but the operator
+        knows the distinct voice_id wasn't honoured by the audio.
+        """
+        base, _, idx_str = voice_id.partition("#")
+        candidate = Path(self.model_dir) / f"{base}.onnx"
+        if not candidate.exists():
+            return None
+        try:
+            speaker_idx = int(idx_str) if idx_str else 0
+        except ValueError:
+            logger.warning(
+                "[PIPER] invalid speaker idx %r in voice_id %r; using 0",
+                idx_str, voice_id,
+            )
+            speaker_idx = 0
+        if speaker_idx > 0:
+            num_speakers = self._load_num_speakers(candidate)
+            if speaker_idx >= num_speakers:
+                logger.warning(
+                    "[PIPER] voice_id %r requested speaker %d but model "
+                    "has %d speakers; falling back to 0 (audio will be "
+                    "identical to speaker 0)",
+                    voice_id, speaker_idx, num_speakers,
+                )
+                speaker_idx = 0
+        return candidate, speaker_idx
+
+    @staticmethod
+    def _load_num_speakers(model_path: Path) -> int:
+        """Read num_speakers from the model's .onnx.json config.
+        Defaults to 1 on any error so we err on the side of clamping
+        instead of crashing the synth path."""
+        config_path = model_path.with_suffix(".onnx.json")
+        if not config_path.exists():
+            return 1
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            n = int(data.get("num_speakers", 1))
+            return max(1, n)
+        except Exception as exc:
+            logger.warning(
+                "[PIPER] could not parse %s: %s — assuming num_speakers=1",
+                config_path, exc,
+            )
+            return 1
+
+    async def _synthesise(self, text: str, model_path: Path,
+                          speaker_idx: int = 0) -> str:
         out_path = Path(tempfile.mkstemp(suffix=".wav")[1])
         cmd = [self.piper_bin, "--model", str(model_path),
                "--output_file", str(out_path)]
+        if speaker_idx:
+            # Piper's --speaker takes an integer index. Passing 0 is
+            # redundant (it's the default) so we omit it on the common
+            # path, keeping the cmdline minimal for single-voice models.
+            cmd.extend(["--speaker", str(speaker_idx)])
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
