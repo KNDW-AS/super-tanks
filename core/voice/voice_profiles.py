@@ -14,7 +14,7 @@ touching code:
 
   ST_VOICE_AERIS   override voice_id for Aeris
   ST_VOICE_ZEPH    override voice_id for Zeph
-  ST_VOICE_LANG    override language code (default nb_NO)
+  ST_VOICE_LANG    override language code (default no_NO)
 
 Default voice ids assume a Piper installation with the canonical
 Norwegian models from rhasspy/piper. If you switch backend (e.g. to
@@ -49,8 +49,8 @@ _DEFAULT_PROFILES: Dict[str, VoiceProfile] = {
         agent_id="aeris",
         # Piper Norwegian female. The medium quality model balances
         # latency vs naturalness for the family-facing use cases.
-        voice_id="nb_NO-talesyntese-medium",
-        language="nb_NO",
+        voice_id="no_NO-talesyntese-medium",
+        language="no_NO",
         description="Warm Norwegian female — Aeris's family voice",
     ),
     "zeph": VoiceProfile(
@@ -59,8 +59,8 @@ _DEFAULT_PROFILES: Dict[str, VoiceProfile] = {
         # we use the same model family with a slightly different
         # speaker id when available. The operator likely needs to
         # override this with whatever they actually have installed.
-        voice_id="nb_NO-talesyntese-medium#1",
-        language="nb_NO",
+        voice_id="no_NO-talesyntese-medium#1",
+        language="no_NO",
         description="Calm Norwegian male — Zeph's technical voice",
     ),
     "cody": VoiceProfile(

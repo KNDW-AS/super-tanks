@@ -20,7 +20,7 @@ testable surface of this repo. The structure here is:
 Operators wire the binary path + model dir via env vars:
 
     ST_PIPER_BIN           path to the piper executable
-    ST_PIPER_MODEL_DIR     dir containing nb_NO-*-medium.onnx files
+    ST_PIPER_MODEL_DIR     dir containing no_NO-*-medium.onnx files
     ST_PIPER_HA_PLAY_URL   HA REST URL for play_media (optional)
 
 Without those, every call returns False and logs a single line — the
@@ -88,8 +88,8 @@ class PiperTTSBackend(DIQVoiceTTS):
                 pass
 
     def _resolve_model_path(self, voice_id: str) -> "Path | None":
-        # voice_id forms: "nb_NO-talesyntese-medium" or
-        # "nb_NO-talesyntese-medium#1" (speaker idx).
+        # voice_id forms: "no_NO-talesyntese-medium" or
+        # "no_NO-talesyntese-medium#1" (speaker idx).
         base = voice_id.split("#", 1)[0]
         candidate = Path(self.model_dir) / f"{base}.onnx"
         return candidate if candidate.exists() else None

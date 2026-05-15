@@ -11,7 +11,7 @@ class TestVoiceProfiles:
         monkeypatch.delenv("ST_VOICE_LANG", raising=False)
         p = voice_profiles.get_voice_profile("aeris")
         assert p.agent_id == "aeris"
-        assert "nb_NO" in p.language
+        assert "no_NO" in p.language
         assert p.voice_id  # non-empty
 
     def test_zeph_default_profile(self, monkeypatch):
