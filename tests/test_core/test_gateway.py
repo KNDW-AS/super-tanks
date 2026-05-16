@@ -63,6 +63,27 @@ def fake_registry(monkeypatch):
     return tools
 
 
+@pytest.fixture(autouse=True)
+def audit(tmp_path, monkeypatch):
+    """Isolate dispatch_audit.DB_PATH for every test in this module.
+
+    Without this autouse, tests that exercise gateway.dispatch_tool()
+    (e.g. TestIdentityVerification) write rows to the real
+    data/dispatch_audit.db. Those rows are HMAC-signed with the test
+    fixture key, so subsequent production verify_chain calls (e.g.
+    threat_scan.py on first deploy) flag them as tampered and trip
+    SOUL_GUARD into SAFE_MODE. Auto-isolation closes that gap.
+
+    Tests that need the fixture by name still get it — the autouse
+    fixture is also injectable as a regular parameter.
+    """
+    from core.security import dispatch_audit
+    monkeypatch.setattr(dispatch_audit, "DB_PATH",
+                        tmp_path / "dispatch.db")
+    monkeypatch.setattr(dispatch_audit, "_initialised", False)
+    return dispatch_audit
+
+
 # ── Identity verification (the gate before everything else) ────────────────
 
 class TestIdentityVerification:
@@ -239,13 +260,6 @@ class TestDispatchAudit:
     correlation_id is also visible to downstream collaborators via the
     ContextVar — that's what makes incident reconstruction possible."""
 
-    @pytest.fixture
-    def audit(self, tmp_path, monkeypatch):
-        from core.security import dispatch_audit
-        monkeypatch.setattr(dispatch_audit, "DB_PATH",
-                            tmp_path / "dispatch.db")
-        monkeypatch.setattr(dispatch_audit, "_initialised", False)
-        return dispatch_audit
 
     def test_allowed_dispatch_recorded_with_corr_id(
             self, fake_registry, identity, audit):
