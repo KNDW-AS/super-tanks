@@ -340,21 +340,28 @@ class TestTriggerTripwireAlarm:
     def test_never_raises_when_all_subsystems_fail(self, monkeypatch, caplog):
         # Every collaborator throws — function must still return cleanly
         # AND must log each failure (silent swallow is a separate bug).
-        for mod_name, attr, value in [
-            ("core.security.super_tanks_mode", "get_mode",
+        #
+        # Use monkeypatch.setattr (NOT bare setattr) so the attribute
+        # mutations are tracked and reverted at test teardown. The
+        # earlier version used `setattr(stub, attr, value)` which left
+        # the raising lambdas installed on the real module — and the
+        # next test that touched audit_log.log_access got a
+        # RuntimeError out of nowhere.
+        for dotted, value in [
+            ("core.security.super_tanks_mode.get_mode",
              lambda: (_ for _ in ()).throw(RuntimeError("mode down"))),
-            ("core.security.super_tanks_mode", "set_mode",
+            ("core.security.super_tanks_mode.set_mode",
              lambda m: (_ for _ in ()).throw(RuntimeError("mode down"))),
-            ("core.memory.audit_log", "log_access",
+            ("core.memory.audit_log.log_access",
              lambda **kw: (_ for _ in ()).throw(RuntimeError("audit down"))),
         ]:
-            stub = sys.modules.get(mod_name) or types.ModuleType(mod_name)
-            setattr(stub, attr, value)
-            monkeypatch.setitem(sys.modules, mod_name, stub)
+            monkeypatch.setattr(dotted, value, raising=False)
 
-        # Make TankMode accessible on the broken super_tanks_mode stub.
-        stm = sys.modules["core.security.super_tanks_mode"]
-        stm.TankMode = _FakeModeEnum
+        # TankMode also goes through monkeypatch so it gets cleaned up.
+        monkeypatch.setattr(
+            "core.security.super_tanks_mode.TankMode", _FakeModeEnum,
+            raising=False,
+        )
 
         # requests.post raises
         def _boom(*a, **kw):
