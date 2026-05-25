@@ -10,12 +10,12 @@ curl -sSL https://aeris.no/install.sh | bash
 
 ## What is Super Tanks?
 
-Super Tanks is a security and governance framework for AI home assistants. It controls what AI agents can and cannot do, giving you full control over your AI system.
+Super Tanks is a compliance-by-design security and governance architecture for autonomous AI agents. It controls what AI agents can and cannot do at the architectural level — every action is mediated through 10 enforcement layers before it reaches a tool, a model, or the outside world.
 
 - **10 security layers** running simultaneously
-- **5-level user access** — you decide who can do what
+- **5-level user access** — explicit access control per principal
 - **Works offline** — local AI via Ollama, no cloud required
-- **Smart home ready** — Home Assistant integration
+- **Auditable** — every decision logged, every soul SHA256-sealed
 - **Open source** — Apache 2.0
 
 ## The 10 Security Layers
@@ -48,7 +48,7 @@ Download `install.exe` from [Releases](https://github.com/billyxp74/super-tanks/
 2. Ollama is installed (local AI engine)
 3. Super Tanks containers start
 4. Setup wizard opens at `http://localhost:8765/setup`
-5. Answer a few questions — your AI home is ready
+5. Answer a few questions — your agent stack is ready
 
 ## User Access Levels
 
@@ -56,11 +56,11 @@ Download `install.exe` from [Releases](https://github.com/billyxp74/super-tanks/
 |-------|------|--------|
 | 5 | Full | Everything — system admin |
 | 4 | Near-full | Like 5, but can't delete system or last admin |
-| 3 | Configured | Chat + smart home + status panels |
-| 2 | Standard | Chat + permitted smart home devices |
+| 3 | Configured | Chat + configured tool zones + status panels |
+| 2 | Standard | Chat + permitted tools within their zone |
 | 1 | Limited | One agent only, content filter + curfew apply |
 
-Per-user settings (independent of level): curfew, emergency override, content filter, permitted devices, alert preferences.
+Per-user settings (independent of level): curfew, emergency override, content filter, permitted tools, alert preferences.
 
 ## Dual Mode
 
@@ -69,7 +69,7 @@ Per-user settings (independent of level): curfew, emergency override, content fi
 
 ## Philosophy
 
-Super Tanks has no opinion about who lives in your home. Not how many people. Not their ages. Not their relationships. You assign access levels. You set filters. You decide who can do what. Super Tanks enforces whatever you decide — nothing more, nothing less.
+Super Tanks has no opinion about who uses your system. Not how many principals. Not their roles. Not their relationships. You assign access levels. You set filters. You decide who can do what. Super Tanks enforces whatever you decide — nothing more, nothing less.
 
 ## Tech Stack
 
