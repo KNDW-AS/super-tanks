@@ -193,6 +193,36 @@ class TestVerifyOrDrop:
     def test_none_input_returns_none(self):
         assert er.verify_or_drop(None) is None
 
+    def test_verify_helper_import_failure_drops(self, monkeypatch, caplog):
+        # Force the lazy `from core.security.agent_identity import
+        # verify_a2a_message` to raise. Setting the module to None in
+        # sys.modules makes the import statement raise ImportError.
+        import sys
+        from core.diq.diq_a2a import A2AMessage
+        monkeypatch.setitem(sys.modules, "core.security.agent_identity", None)
+        msg = A2AMessage(sender="aeris", recipient="zeph",
+                         message_type="request")
+        with caplog.at_level("ERROR", logger="super_tanks.a2a"):
+            assert er.verify_or_drop(msg) is None
+        assert any("verify_a2a_message unavailable" in r.message
+                   for r in caplog.records)
+
+    def test_module_import_tolerates_missing_diq_a2a(self, monkeypatch):
+        # Lines 56-59: the top-level `from core.diq.diq_a2a import
+        # A2AMessage` is wrapped in try/except so this module is
+        # importable even when diq_a2a is not present. Reload with
+        # diq_a2a poisoned and verify the import does not raise.
+        import importlib
+        import sys
+        monkeypatch.setitem(sys.modules, "core.diq.diq_a2a", None)
+        try:
+            reloaded = importlib.reload(er)
+            assert reloaded.should_escalate_to_zeph("debug the server") is True
+        finally:
+            # Restore real module so later tests see real A2AMessage.
+            monkeypatch.undo()
+            importlib.reload(er)
+
 
 class TestSharedResponsibility:
     def test_shared_list_is_nonempty(self):
