@@ -2,7 +2,7 @@
 
 **The governance layer that makes AI autonomy possible.**
 
-Not a detection tool that reacts after something goes wrong. 12 simultaneous security layers that prevent it from happening in the first place.
+Not a detection tool that reacts after something goes wrong. 10 simultaneous security layers that prevent it from happening in the first place.
 
 ```bash
 curl -sSL https://aeris.no/install.sh | bash
@@ -18,22 +18,20 @@ Super Tanks is a security and governance framework for AI home assistants. It co
 - **Smart home ready** — Home Assistant integration
 - **Open source** — Apache 2.0
 
-## The 12 Security Layers
+## The 10 Security Layers
 
 | # | Layer | What it does |
 |---|-------|-------------|
-| 1 | **ZEF Firewall** | Blocks prompt injection attacks (30+ patterns, EN/NO) + MCP tool-call filtering |
-| 2 | **Soul Files** | Agent identities are sealed and tamper-proof (SHA256) |
-| 3 | **DIQ Contracts** | Frozen interface contracts — agents can't modify their own tools |
-| 4 | **Allowlists** | Per-agent tool permissions — explicit allow, default deny |
-| 5 | **GO-Gate** | Risky actions require human approval via Telegram |
-| 6 | **Quarantine** | Code proposals scanned for sandbox escapes (28 patterns) |
-| 7 | **Memory RBAC** | Role-based access control on agent memory |
-| 8 | **Tripwires** | Honeypot files that trigger instant lockdown |
-| 9 | **Trust Score** | Behavioral reputation — good behavior earns autonomy |
-| 10 | **Token Budget** | Per-agent daily spending limits |
-| 11 | **Provider Trust Tier** | Data filtering per LLM provider — local/trusted/mixed/open |
-| 12 | **Soul Split** | Tier-based prompt separation — identity vs capabilities |
+| 1 | **ZEF Firewall** | Secondary LLM filter against obfuscated prompt injection |
+| 2 | **Soul Files** | SHA256-sealed agent identity — tamper-evident |
+| 3 | **DIQ Layer** | Declarative interface contracts — frozen tool surfaces |
+| 4 | **Allowlists** | Per-agent access control — explicit allow, default deny |
+| 5 | **GO-Gate** | Human-in-the-loop approval for risky actions |
+| 6 | **Sandbox** | Docker isolation for untrusted execution |
+| 7 | **Circuit Breaker** | Per-agent rate-limit on tool invocations |
+| 8 | **Tool Zone Isolation** | 49 tools partitioned into 7 zones |
+| 9 | **MCP Security Manager** | Trust-level enforcement for MCP servers |
+| 10 | **allowed_agents** | Skill-level isolation per agent (added 2026-05-25) |
 
 ## Install
 
