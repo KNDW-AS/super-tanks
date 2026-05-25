@@ -164,6 +164,10 @@ def should_escalate_to_zeph(message: str) -> bool:
     """
     Return True if the message contains patterns that indicate Zeph
     should handle it (tech, security, code, diagnostics, etc.).
+
+    :param message: The user message text to evaluate.
+    :returns: True if any Aeris→Zeph trigger pattern matches.
+    :rtype: bool
     """
     return any(pat.search(message) for pat, _ in AERIS_TO_ZEPH_TRIGGERS)
 
@@ -172,6 +176,10 @@ def should_escalate_to_aeris(message: str) -> bool:
     """
     Return True if the message contains patterns that indicate Aeris
     should handle it (emotions, family, creativity, daily life, etc.).
+
+    :param message: The user message text to evaluate.
+    :returns: True if any Zeph→Aeris trigger pattern matches.
+    :rtype: bool
     """
     return any(pat.search(message) for pat, _ in ZEPH_TO_AERIS_TRIGGERS)
 
@@ -181,6 +189,10 @@ def should_escalate_to_cody(message: str) -> bool:
     Return True if the message contains patterns that indicate Cody
     should handle it (code review, refactor, missing tests, PR
     feedback, etc.).
+
+    :param message: The user message text to evaluate.
+    :returns: True if any to-Cody trigger pattern matches.
+    :rtype: bool
     """
     return any(pat.search(message) for pat, _ in TO_CODY_TRIGGERS)
 
