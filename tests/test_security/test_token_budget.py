@@ -8,6 +8,8 @@ and event logging.
 
 import pytest
 
+from core.security import token_budget
+
 
 # ── record_usage / get_daily_usage ─────────────────────────────────────────
 
@@ -155,3 +157,65 @@ class TestEventLogging:
         finally:
             conn.close()
         assert rows[0] == 0
+
+
+# ── _ensure_db (lazy schema bootstrap) ─────────────────────────────────────
+
+class TestEnsureDb:
+    """Cover the double-checked-locking and exception-rollback paths in
+    `_ensure_db`. The fixture is *not* used here: we control the
+    `_initialised` flag directly to exercise the locked branches."""
+
+    def test_fast_path_returns_when_already_initialised(self, monkeypatch):
+        # Outer check on line 43 short-circuits — no lock acquired, no
+        # _init_db call.
+        monkeypatch.setattr(token_budget, "_initialised", True)
+        called = []
+        monkeypatch.setattr(token_budget, "_init_db",
+                            lambda: called.append(1))
+        token_budget._ensure_db()
+        assert called == []
+
+    def test_double_checked_lock_second_check_returns(self, monkeypatch):
+        # Simulate the race: outer check sees False, but by the time we
+        # acquire the lock another thread has flipped the flag. The
+        # inner check on line 46-47 must short-circuit and skip
+        # _init_db. We synthesise the race by wrapping the lock's
+        # __enter__ to set _initialised=True before the body runs.
+        monkeypatch.setattr(token_budget, "_initialised", False)
+        called = []
+        monkeypatch.setattr(token_budget, "_init_db",
+                            lambda: called.append(1))
+
+        real_lock = token_budget._init_lock
+
+        class RacingLock:
+            def __enter__(self_inner):
+                # Another "thread" finished bootstrap first.
+                token_budget._initialised = True
+                return real_lock.__enter__()
+
+            def __exit__(self_inner, *exc):
+                return real_lock.__exit__(*exc)
+
+        monkeypatch.setattr(token_budget, "_init_lock", RacingLock())
+        token_budget._ensure_db()
+        # Inner guard tripped → _init_db was NOT invoked.
+        assert called == []
+        assert token_budget._initialised is True
+
+    def test_init_failure_resets_flag_and_reraises(self, monkeypatch):
+        # If _init_db blows up (e.g. disk full, permission denied) the
+        # bootstrap must roll the flag back so a later call retries
+        # instead of silently leaving an unmigrated DB.
+        monkeypatch.setattr(token_budget, "_initialised", False)
+
+        def boom():
+            raise RuntimeError("simulated sqlite failure")
+
+        monkeypatch.setattr(token_budget, "_init_db", boom)
+
+        with pytest.raises(RuntimeError, match="simulated sqlite failure"):
+            token_budget._ensure_db()
+        # The except branch on lines 51-53 must have reset the flag.
+        assert token_budget._initialised is False
