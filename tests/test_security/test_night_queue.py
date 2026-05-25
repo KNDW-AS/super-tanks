@@ -162,3 +162,65 @@ class TestMorningReport:
         report = night_queue_db.build_morning_report()
         assert "/approve-morning" in report
         assert "/dismiss-morning" in report
+
+
+# ── _ensure_db lazy bootstrap ──────────────────────────────────────────────
+
+class TestEnsureDb:
+    def test_skips_when_already_initialised(self, night_queue_db, monkeypatch):
+        # Fast-path: the unlocked `if _initialised: return` at the top of
+        # _ensure_db must early-exit without taking the lock or calling
+        # _init_db. After night_queue_db fixture runs, _initialised=True.
+        called = []
+        monkeypatch.setattr(night_queue_db, "_init_db",
+                            lambda: called.append(1))
+        night_queue_db._ensure_db()
+        assert called == []
+
+    def test_double_checked_lock_skips_when_winner_already_inited(
+            self, night_queue_db, monkeypatch):
+        # The second `if _initialised: return` inside the lock (line 47)
+        # handles the case where another thread set the flag while we
+        # waited for the lock. Simulate by entering _ensure_db with
+        # _initialised=False, but flipping it to True while the lock is
+        # contended.
+        monkeypatch.setattr(night_queue_db, "_initialised", False)
+        called = []
+        monkeypatch.setattr(night_queue_db, "_init_db",
+                            lambda: called.append(1))
+
+        original_lock = night_queue_db._init_lock
+
+        class FlippingLock:
+            def __enter__(self_inner):
+                # Pretend a competing thread won the race: flip the flag
+                # before _ensure_db re-checks it inside the critical
+                # section. The inner `if _initialised: return` (line 47)
+                # must trigger.
+                monkeypatch.setattr(night_queue_db, "_initialised", True)
+                return original_lock.__enter__()
+
+            def __exit__(self_inner, *a):
+                return original_lock.__exit__(*a)
+
+        monkeypatch.setattr(night_queue_db, "_init_lock", FlippingLock())
+        night_queue_db._ensure_db()
+        # _init_db must not have been invoked — line 47 short-circuited.
+        assert called == []
+
+    def test_init_failure_resets_flag_and_reraises(
+            self, night_queue_db, monkeypatch):
+        # When _init_db raises, _ensure_db must reset _initialised to
+        # False (so the next caller retries) and propagate the error.
+        monkeypatch.setattr(night_queue_db, "_initialised", False)
+
+        def boom():
+            raise RuntimeError("schema bootstrap failed")
+
+        monkeypatch.setattr(night_queue_db, "_init_db", boom)
+
+        with pytest.raises(RuntimeError, match="schema bootstrap failed"):
+            night_queue_db._ensure_db()
+
+        # Critical: flag must be cleared so a retry can succeed.
+        assert night_queue_db._initialised is False
