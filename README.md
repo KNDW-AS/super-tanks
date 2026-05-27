@@ -33,6 +33,45 @@ Super Tanks is a compliance-by-design security and governance architecture for a
 | 9 | **MCP Security Manager** | Trust-level enforcement for MCP servers |
 | 10 | **allowed_agents** | Skill-level isolation per agent (added 2026-05-25) |
 
+## OWASP Top 10 for Agentic Applications (ASI 2026)
+
+Super Tanks is built against the [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) — the first globally peer-reviewed security framework for autonomous AI systems. The architecture predates the standard but maps cleanly to every category.
+
+| ASI | Threat | Super Tanks layers that address it |
+|---|---|---|
+| **ASI01** | Agent Goal Hijack — attacker manipulates objectives, instructions, or decision path | ZEF Firewall (1), Soul Files (2), Allowlists (4), GO-Gate (5) |
+| **ASI02** | Tool Misuse & Exploitation — unsafe or attacker-induced tool use | DIQ Layer (3), Allowlists (4), Tool Zone Isolation (8), Circuit Breaker (7), GO-Gate (5), allowed_agents (10) |
+| **ASI03** | Agent Identity & Privilege Abuse — identity gaps, privilege escalation | Soul Files (2), Allowlists (4), allowed_agents (10), 5-level user access |
+| **ASI04** | Agentic Supply Chain Vulnerabilities — poisoned MCP/A2A registries, tampered tool descriptions | MCP Security Manager (9), DIQ Layer (3), Sandbox (6), Tool Zone Isolation (8) |
+| **ASI05** | Unexpected Code Execution (RCE) — natural-language paths trigger arbitrary execution | Sandbox (6), GO-Gate (5), ZEF Firewall (1), DIQ Layer (3), Tool Zone Isolation (8) |
+| **ASI06** | Memory & Context Poisoning — long-lasting behavior changes via poisoned memory | Soul Files (2), RBAC + tripwires in memory module, DIQ Layer (3) |
+| **ASI07** | Insecure Inter-Agent Communication — spoofed messages misdirect agent clusters | A2A whitelist + escalation rules, Allowlists (4), Soul Files (2) |
+| **ASI08** | Cascading Failures — multi-step failures spread across workflows | Circuit Breaker (7), GO-Gate (5), LOCKDOWN mode, full audit log |
+| **ASI09** | Human-Agent Trust Exploitation — attackers exploit human-agent trust | GO-Gate (5) with Telegram approvals, audit log, content filter |
+| **ASI10** | Rogue Agents — agents act beyond intended scope | Soul Files (2), Allowlists (4), allowed_agents (10), Zeph proactive monitoring, Dual Mode |
+
+### Designed to prevent — real-world incidents from 2026
+
+| Incident | Date | Class | Super Tanks defense |
+|---|---|---|---|
+| Anthropic MCP SDK STDIO command execution | Apr 2026 | ASI05 / ASI04 | Sandbox + DIQ (no STDIO without frozen contract) |
+| ContextCrush (Noma Security disclosure) | 5 Mar 2026 | ASI06 | Soul Files + memory tripwires |
+| Mercor / LiteLLM credential breach | 2 Apr 2026 | ASI03 / ASI04 | Allowlists + MCP Security Manager |
+| ~200,000 unauthenticated MCP instances exposed | 2026 | ASI04 | MCP Security Manager (trust levels) |
+| Nine of eleven MCP registries poisoned (OX research) | Apr 2026 | ASI04 | DIQ frozen contracts + zone isolation |
+| Invariant Labs MCP Tool Poisoning (TPA / FSP) | Mar 2025 | ASI02 / ASI04 | DIQ Layer + Tool Zone Isolation |
+
+### Compliance posture for EU AI Act (Aug 2, 2026)
+
+Most EU AI Act rules apply from **August 2, 2026**. Super Tanks provides the architectural controls enterprises need for GPAI deployment audits:
+
+- Identity, access, and audit controls (Art. 13–14, 15)
+- Human oversight mechanisms (Art. 14) — GO-Gate is human-in-the-loop by design
+- Logging and traceability (Art. 12) — every decision recorded, every soul SHA256-sealed
+- Robustness and cybersecurity (Art. 15) — 10 simultaneous layers
+
+This is compliance-by-design, not compliance-by-audit. The controls exist before the deployment, not after.
+
 ## Install
 
 ### Linux / macOS
