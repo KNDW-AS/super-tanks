@@ -12,3 +12,9 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# Local runtime artifacts (not part of the public release)
+memory/
+vendor/
+config/voice_rooms.json
+config/zef_baseline.json

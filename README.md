@@ -1,11 +1,19 @@
 # Super Tanks v3.2
 
+[![CI](https://github.com/billyxp74/super-tanks/actions/workflows/tests.yml/badge.svg)](https://github.com/billyxp74/super-tanks/actions/workflows/tests.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![OWASP Agentic Top 10 (2026)](https://img.shields.io/badge/OWASP-Agentic_Top_10_2026-1f6feb.svg)](#owasp-top-10-for-agentic-applications-asi-2026)
+[![Tests](https://img.shields.io/badge/tests-1033-success.svg)](#)
+
 **The governance layer that makes AI autonomy possible.**
 
 Not a detection tool that reacts after something goes wrong. 10 simultaneous security layers that prevent it from happening in the first place.
 
 ```bash
-curl -sSL https://aeris.no/install.sh | bash
+git clone https://github.com/billyxp74/super-tanks.git
+cd super-tanks
+less install.sh        # review the script before running it
+./install.sh
 ```
 
 ## What is Super Tanks?
@@ -74,13 +82,30 @@ This is compliance-by-design, not compliance-by-audit. The controls exist before
 
 ## Install
 
-### Linux / macOS
+Super Tanks is a server-side framework (Docker + Python + Ollama). It installs on
+a machine you control — a Linux server or desktop is the primary target.
+
+### Linux (primary)
 ```bash
-curl -sSL https://aeris.no/install.sh | bash
+git clone https://github.com/billyxp74/super-tanks.git
+cd super-tanks
+less install.sh        # review the script before running it
+./install.sh
 ```
 
+### macOS
+Same steps as Linux. Requires Docker Desktop.
+
 ### Windows
-Download `install.exe` from [Releases](https://github.com/billyxp74/super-tanks/releases) and double-click.
+Use WSL2 (or Git Bash) and follow the Linux steps above. Platform helpers live in
+[`installer/`](installer/).
+
+### Access from your phone (iOS / Android)
+Super Tanks does not run *on* a phone — but it doesn't need to. The dashboard and
+setup wizard are a web UI: once the stack is running, open `http://<host>:8765`
+from any browser (iPhone, iPad, Android), or reach it securely over Tailscale.
+**GO-Gate** approval prompts also arrive via **Telegram**, so you can approve or
+deny agent actions from your phone.
 
 ### What happens
 1. Docker is installed (if needed)
