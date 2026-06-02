@@ -13,8 +13,13 @@ Please **do not** open a public GitHub issue for security reports. Use one of:
 - **GitHub Security Advisory:** Use the *Report a vulnerability* button under
   the **Security** tab of this repository.
 
-Encrypt sensitive reports with the maintainer's PGP key (key ID and
-fingerprint published at `https://aeris.no/security.txt`).
+Encrypt sensitive reports with our PGP key:
+
+- **Fingerprint:** `6D64 161B 5468 22B4 2CE5 2C29 0503 8155 61CC 87EB`
+- **Public key:** https://aeris.no/.well-known/security-pgp-key.txt
+
+A machine-readable, PGP-signed security policy (RFC 9116) is published at
+`https://aeris.no/.well-known/security.txt`.
 
 ### What to include
 
