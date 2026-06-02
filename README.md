@@ -3,7 +3,7 @@
 [![CI](https://github.com/billyxp74/super-tanks/actions/workflows/tests.yml/badge.svg)](https://github.com/billyxp74/super-tanks/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![OWASP Agentic Top 10 (2026)](https://img.shields.io/badge/OWASP-Agentic_Top_10_2026-1f6feb.svg)](#owasp-top-10-for-agentic-applications-asi-2026)
-[![Tests](https://img.shields.io/badge/tests-1033-success.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1378_passing-success.svg)](#)
 
 **The governance layer that makes AI autonomy possible.**
 
@@ -171,6 +171,6 @@ Apache 2.0 — see [LICENSE](LICENSE).
 
 ## Author
 
-William Louis Park — [KNDW Shelter Solutions AS](https://aeris.no)
+William Louis Park — [KNDW Shelter Solutions AS](https://kndw.no)
 
 Built with Claude (Anthropic), Gemini (Google), and Kimi (Moonshot).
