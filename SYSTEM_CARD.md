@@ -157,8 +157,8 @@ outside this open-source release and is responsible for calling
 
 ## Validation
 
-- Test surface: 969 pytest tests, ~79% line coverage on `core/` and
-  `scripts/` (`pytest.ini` enforces 70% floor in CI).
+- Test surface: 1,378 pytest tests (collected in CI; `pytest.ini` enforces a
+  70% coverage floor on `core/` and `scripts/`).
 - Concurrency tests for trust_score, audit_log, hierarchical_store,
   approval store atomicity.
 - Fail-closed tests for every defense layer (gateway, soul guard,
