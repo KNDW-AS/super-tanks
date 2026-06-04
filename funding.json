@@ -1,0 +1,82 @@
+{
+  "version": "v1.0.0",
+  "entity": {
+    "type": "organisation",
+    "role": "owner",
+    "name": "KNDW Shelter Solutions AS",
+    "email": "wlp@kndw.no",
+    "phone": "",
+    "description": "Norwegian deep-tech company (org. 935285496) building open-source security and governance infrastructure for autonomous AI agents. Backed by Innovation Norway (grant 2026/130689).",
+    "webpageUrl": {
+      "url": "https://supertanks.kndw.no"
+    }
+  },
+  "projects": [
+    {
+      "guid": "super-tanks",
+      "name": "Super Tanks",
+      "description": "Compliance-by-design security and governance architecture for autonomous AI agents. Ten simultaneous enforcement layers control what AI agents can and cannot do at the architectural level — every action is mediated before it reaches a tool, model, or the outside world. Built against the OWASP Top 10 for Agentic Applications (2026) and the EU AI Act. Runs locally/offline, every decision logged, Apache 2.0.",
+      "webpageUrl": {
+        "url": "https://github.com/billyxp74/super-tanks"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/billyxp74/super-tanks",
+        "wellKnown": "https://github.com/billyxp74/super-tanks/blob/main/funding.json"
+      },
+      "licenses": [
+        "spdx:Apache-2.0"
+      ],
+      "tags": [
+        "ai-safety",
+        "ai-security",
+        "ai-agents",
+        "agentic-ai",
+        "governance",
+        "guardrails",
+        "security",
+        "open-source",
+        "compliance"
+      ]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "kndw-direct",
+        "type": "other",
+        "address": "wlp@kndw.no",
+        "description": "Contact KNDW Shelter Solutions AS at wlp@kndw.no to arrange grant or sponsorship funding (bank transfer / invoice)."
+      }
+    ],
+    "plans": [
+      {
+        "guid": "maintainer-time",
+        "status": "active",
+        "name": "Maintainer & security-hardening time",
+        "description": "Funds dedicated maintainer time to harden the ten enforcement layers, expand the test suite (currently 1378 tests), and keep pace with emerging agentic-AI threats (MCP supply-chain, prompt injection, memory poisoning).",
+        "amount": 30000,
+        "currency": "USD",
+        "frequency": "one-time"
+      },
+      {
+        "guid": "owasp-eu-ai-act-mapping",
+        "status": "active",
+        "name": "OWASP Agentic Top 10 & EU AI Act conformance",
+        "description": "Funds documentation and tooling that maps Super Tanks controls to the OWASP Top 10 for Agentic Applications and EU AI Act articles 12–15, so adopters can use it as a compliance reference implementation.",
+        "amount": 60000,
+        "currency": "USD",
+        "frequency": "one-time"
+      },
+      {
+        "guid": "sustained-development",
+        "status": "active",
+        "name": "Sustained open-source development",
+        "description": "Annual support to keep Super Tanks maintained, documented and responsive to community security reports.",
+        "amount": 100000,
+        "currency": "USD",
+        "frequency": "yearly"
+      }
+    ],
+    "history": []
+  }
+}
