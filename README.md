@@ -69,16 +69,20 @@ Super Tanks is built against the [OWASP Top 10 for Agentic Applications 2026](ht
 | Nine of eleven MCP registries poisoned (OX research) | Apr 2026 | ASI04 | DIQ frozen contracts + zone isolation |
 | Invariant Labs MCP Tool Poisoning (TPA / FSP) | Mar 2025 | ASI02 / ASI04 | DIQ Layer + Tool Zone Isolation |
 
-### Compliance posture for EU AI Act (Aug 2, 2026)
+### Compliance posture for the EU AI Act
 
-Most EU AI Act rules apply from **August 2, 2026**. Super Tanks provides the architectural controls enterprises need for GPAI deployment audits:
+The EU AI Act's obligations phase in over several years rather than on a single date. Following the **Digital Omnibus** political agreement (7 May 2026), most stand-alone high-risk obligations — **Art. 12 (logging)**, **Art. 14 (human oversight)**, **Art. 15 (robustness & cybersecurity)** and **Art. 27 (FRIA)** — are deferred to **~2 December 2027**. **Art. 13 (transparency)** and certain other duties still apply from **2 August 2026**, and Annex I product-embedded high-risk systems follow on **2 August 2028**.
 
-- Identity, access, and audit controls (Art. 13–14, 15)
-- Human oversight mechanisms (Art. 14) — GO-Gate is human-in-the-loop by design
+> The Digital Omnibus is a provisional political agreement, not yet final law — these dates may move. This section is not legal advice; verify the current timeline before relying on it.
+
+The obligations are coming, and preparing for them takes time. Super Tanks aims to give you the architectural controls early, so readiness becomes a matter of configuration rather than a scramble:
+
 - Logging and traceability (Art. 12) — every decision recorded, every soul SHA256-sealed
-- Robustness and cybersecurity (Art. 15) — 10 simultaneous layers
+- Human oversight (Art. 14) — GO-Gate is human-in-the-loop by design
+- Robustness and cybersecurity (Art. 15) — multiple simultaneous enforcement layers
+- Transparency (Art. 13) — auditable decisions and a published [system card](SYSTEM_CARD.md)
 
-This is compliance-by-design, not compliance-by-audit. The controls exist before the deployment, not after.
+This is compliance-by-design, not compliance-by-audit: the controls exist before the deployment, not after.
 
 ## Install
 

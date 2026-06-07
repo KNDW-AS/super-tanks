@@ -17,8 +17,9 @@ Apache 2.0 · local-first (Ollama) · works fully offline · 1,378 tests.
 - **Full OWASP Top 10 for Agentic Applications (ASI 2026) mapping** — every
   category mapped to the concrete layers that address it (see README).
 - **EU AI Act posture** — identity/access/audit controls, human oversight, full
-  logging and traceability, mapped to Articles 12–15 ahead of the August 2, 2026
-  deadline.
+  logging and traceability, mapped to Articles 12–15 ahead of the Act's phased
+  obligations (most high-risk duties now deferred to ~December 2027 under the
+  Digital Omnibus; Art. 13 from August 2026). Not legal advice — see the README.
 - **Published System Card + threat model** — every decision auditable.
 - **5-level user access** and **Dual Mode** (LOCKDOWN / time-boxed AUTONOMOUS).
 
