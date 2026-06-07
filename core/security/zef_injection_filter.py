@@ -174,6 +174,26 @@ INJECTION_PATTERNS: List[Tuple[str, str]] = [
     (r"\bthreading\.timer\b", "sleeper_action"),
     (r"\bsched\.scheduler\b", "sleeper_action"),
     (r"\bapscheduler\b", "sleeper_action"),
+
+    # ── System-prompt / instruction extraction — English ───────────────
+    # "reveal/repeat/print/show your (system) prompt|instructions|rules"
+    (r"\b(reveal|repeat|print|show|display|output|give\s+me|tell\s+me)\s+(me\s+|us\s+)?(your|the\s+system)\s+(system\s+)?(prompt|instructions?|rules|guidelines|directives)", "prompt_extraction"),
+    # "what are/is your (system) prompt|instructions" — possessive required
+    # so "what are the rules of the game?" stays clean.
+    (r"\bwhat\s+(are|is)\s+your\s+(system\s+)?(prompt|instructions?)", "prompt_extraction"),
+
+    # ── System-prompt / instruction extraction — Norwegian ─────────────
+    # Possessive (din/dine/deira) required so "vis meg instruksjonane for
+    # vaskemaskina" (a legitimate how-to) stays clean.
+    (r"\b(vis|vise|gjenta|skriv\s*ut|gi\s+meg|fortel|fortell)\s+.{0,30}(prompt\w*|instruksjon\w*|systemprompt\w*|retningslinj\w*|direktiv\w*)\s+(din|dine|deira)", "prompt_extraction"),
+    (r"\b(kva|hva)\s+er\s+.{0,30}(prompt\w*|instruksjon\w*|systemprompt\w*)\s+(din|dine|deira)", "prompt_extraction"),
+
+    # ── Authority spoof / injected system framing ──────────────────────
+    # The "important_instructions" class (AgentDojo) — content that frames
+    # itself as a higher-priority system/admin message to override the agent.
+    (r"\bnew\s+system\s+prompt\b", "authority_spoof"),
+    (r"<\s*important[_\s]?information\s*>", "authority_spoof"),
+    (r"\bthis\s+is\s+an\s+important\s+message\s+from\s+(me|the\s+(system|admin|user))", "authority_spoof"),
 ]
 
 # Single-match categories that are HIGH confidence even without a second match
@@ -188,6 +208,8 @@ HIGH_CONFIDENCE_CATEGORIES = {
     "fs_probe",              # Requesting file paths has no legitimate use in this context
     "secret_probe",          # Requesting .env/soul/token content is always hostile
     "sleeper_action",        # Background/scheduled tasks are never legitimate for agents
+    "prompt_extraction",     # Asking the agent to reveal its own prompt/instructions
+    "authority_spoof",       # Content posing as a higher-priority system/admin message
 }
 
 

@@ -272,4 +272,27 @@ def _scan_response_for_injection(
                 "original_length": len(text),
             },
         )
+    if verdict.verdict is FilterVerdict.WARN:
+        # Not definitive enough to drop (dropping a low-confidence hit
+        # would cost utility), but this content came from an external
+        # tool and tripped a suspicious pattern. Tag it with provenance
+        # so the agent loop treats it as untrusted *data*, never as
+        # instructions. This closes the WARN-level half of R-02 — the
+        # BLOCK branch above only caught high-confidence payloads.
+        logger.info(
+            "[gateway] tool output from %s flagged untrusted (WARN) corr=%s patterns=%s",
+            tool_name, corr_id, verdict.matched_patterns,
+        )
+        merged = dict(resp.metadata or {})
+        merged.update({
+            "untrusted_content": True,
+            "provenance": "external_tool_output",
+            "provenance_warnings": verdict.matched_patterns,
+        })
+        return ToolResponse(
+            success=resp.success,
+            result=resp.result,
+            error=resp.error,
+            metadata=merged,
+        )
     return resp

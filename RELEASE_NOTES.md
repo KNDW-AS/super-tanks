@@ -5,7 +5,7 @@ detecting bad behavior after the fact, Super Tanks mediates **every** action an
 agent takes through **10 simultaneous enforcement layers** before it reaches a
 tool, a model, or the outside world.
 
-Apache 2.0 · local-first (Ollama) · works fully offline · 1,378 tests.
+Apache 2.0 · local-first (Ollama) · works fully offline · 1,398 tests.
 
 ## Highlights
 

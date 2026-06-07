@@ -3,7 +3,7 @@
 [![CI](https://github.com/billyxp74/super-tanks/actions/workflows/tests.yml/badge.svg)](https://github.com/billyxp74/super-tanks/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![OWASP Agentic Top 10 (2026)](https://img.shields.io/badge/OWASP-Agentic_Top_10_2026-1f6feb.svg)](#owasp-top-10-for-agentic-applications-asi-2026)
-[![Tests](https://img.shields.io/badge/tests-1378_passing-success.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1398_passing-success.svg)](#)
 
 **The governance layer that makes AI autonomy possible.**
 
@@ -57,6 +57,26 @@ Super Tanks is built against the [OWASP Top 10 for Agentic Applications 2026](ht
 | **ASI08** | Cascading Failures — multi-step failures spread across workflows | Circuit Breaker (7), GO-Gate (5), LOCKDOWN mode, full audit log |
 | **ASI09** | Human-Agent Trust Exploitation — attackers exploit human-agent trust | GO-Gate (5) with Telegram approvals, audit log, content filter |
 | **ASI10** | Rogue Agents — agents act beyond intended scope | Soul Files (2), Allowlists (4), allowed_agents (10), Zeph proactive monitoring, Dual Mode |
+
+## MITRE ATLAS mapping
+
+Beyond OWASP, Super Tanks maps to the [MITRE ATLAS](https://atlas.mitre.org/) adversary-technique matrix — the framework most enterprise security teams already use for AI threat modelling and red-teaming. The agent-relevant techniques and the layers that address them:
+
+| ATLAS technique | Threat | Super Tanks layers |
+|---|---|---|
+| **AML.T0051** — LLM Prompt Injection (Direct & Indirect) | Crafted input subverts the model's instructions; indirect payloads ride in via retrieved/tool content | ZEF Firewall (1); tool-output re-scan + `untrusted_content` provenance tagging (`gateway._scan_response_for_injection`); DIQ (3); GO-Gate (5) |
+| **AML.T0054** — LLM Jailbreak | Prompt forces the model past its guardrails | ZEF Firewall (1), Soul Files (2), LOCKDOWN / Night mode, Trust score |
+| **AML.T0057** — LLM Data Leakage | Crafted queries pull out secrets or training data | Allowlists (4), Tool Zone Isolation (8), `secret_probe` filters, audit sanitiser |
+| **AML.T0053** — LLM Plugin Compromise | A poisoned tool/plugin is induced into unsafe action | MCP Security Manager (9), DIQ frozen contracts (3), Tool Zone Isolation (8) |
+| **AML.T0010** — ML Supply Chain Compromise | Poisoned model, registry, or dependency | MCP Security Manager (9), DIQ frozen contracts (3), Sandbox (6) |
+| **AML.T0024 / T0025** — Exfiltration via inference API / cyber means | Data smuggled out through the agent's own channels | `data_exfil` egress filters, Allowlists (4), append-only audit log |
+| **AML.T0012** — Valid Accounts | Stolen or forged agent identity used to act | HMAC identity tokens (`core/security/agent_identity.py`), Allowlists (4), Trust score |
+
+*ATLAS is a living framework; technique IDs are given per the current matrix at [atlas.mitre.org](https://atlas.mitre.org/) and should be verified there before formal audit use.*
+
+### Measured baseline
+
+The ZEF prompt-injection filter is measured against an adversarial corpus on every CI run (`scripts/zef_baseline.py`, `tests/security/redteam/`). Current regex-layer baseline: **100% block rate (57/57 attacks), 0% false positives (0/28 clean cases, including Norwegian near-misses), 100% warn surfacing (3/3).** The corpus is high-signal rather than exhaustive — see [`docs/RISK_REGISTER.md`](docs/RISK_REGISTER.md) (R-22) for the planned fuzzing harness.
 
 ### Designed to prevent — real-world incidents from 2026
 

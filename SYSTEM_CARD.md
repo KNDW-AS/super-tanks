@@ -1,7 +1,7 @@
 # Super Tanks — System Card
 
-**Version:** v3.2 (post-PR #2)
-**Last reviewed:** 2026-05-14
+**Version:** v3.2
+**Last reviewed:** 2026-06-07
 **Maintainer:** William (KNDW Shelter Solutions AS)
 
 This document is the deployer-facing description of the assembled
@@ -137,10 +137,15 @@ outside this open-source release and is responsible for calling
 - **Compromised host.** An attacker with shell as the deploying user
   can read `data/.identity_key`, modify SQLite databases, and rewrite
   source files. Anchor that trust in OS controls, not in Super Tanks.
-- **Indirect prompt injection in tool outputs.** Memory contents and
-  web/file outputs are not re-scanned before being re-fed to the
-  LLM context. Memory poisoning via a crafted `web_browse` result is
-  the canonical path; not yet defended at this layer.
+- **Indirect prompt injection in tool outputs — partial.** Tool output
+  is now re-scanned through the ZEF filter before reaching the agent
+  (`gateway._scan_response_for_injection`, R-02): high-confidence
+  injection is redacted, and lower-confidence ("WARN") content is kept
+  but tagged with `untrusted_content` provenance so the agent treats it
+  as data, not instructions. What remains undefended here: semantic or
+  encoded payloads that no regex/normalisation pattern matches — those
+  rely on the upstream model's refusal training and on the downstream
+  allowlist / GO-Gate limits on what the agent can do with the content.
 - **Runtime escape from approved code.** The AST scan is preventative
   but static. Once a quarantine proposal is approved it runs in the
   same Python process with the same privileges as the agent. A
@@ -157,7 +162,7 @@ outside this open-source release and is responsible for calling
 
 ## Validation
 
-- Test surface: 1,378 pytest tests (collected in CI; `pytest.ini` enforces a
+- Test surface: 1,398 pytest tests (collected in CI; `pytest.ini` enforces a
   70% coverage floor on `core/` and `scripts/`).
 - Concurrency tests for trust_score, audit_log, hierarchical_store,
   approval store atomicity.
@@ -169,11 +174,21 @@ outside this open-source release and is responsible for calling
 - `tests/test_security/test_agent_identity.py` covers HMAC sign +
   verify, key acquisition order, A2A signing, constant-time compare.
 
+Measured:
+
+- ZEF filter resistance against the adversarial corpus
+  (`tests/security/redteam/corpus.py`, `scripts/zef_baseline.py`),
+  as of 2026-06-07: block_rate 100% (57/57 attacks), false-positive
+  rate 0% (0/28 clean cases, including Norwegian near-misses), warn
+  surfacing 100% (3/3). These cover the regex/normalisation layer; the
+  LLM-classifier path is evaluated separately when Ollama is present.
+
 What's NOT validated:
 
-- No measured jailbreak resistance (no documented FPR/FNR on the
-  ZEF filter against an adversarial corpus). See P1 in
-  `docs/RISK_REGISTER.md`.
+- The corpus is high-signal, not exhaustive. The open follow-up (R-22
+  in `docs/RISK_REGISTER.md`) is a larger adversarial fuzzing harness
+  for the ZEF filter and the AST scanner that tracks FPR/FNR over a
+  much wider input space.
 - No formal accuracy benchmark on Aeris responses to children
   (Article 15 EU AIA gap if commercialised).
 - No bias / fairness evaluation. Out of scope for personal use;
