@@ -41,7 +41,6 @@ Operationally:
 
 from __future__ import annotations
 
-import contextvars
 import json
 import logging
 import sqlite3
@@ -205,7 +204,7 @@ def record_threat(threat: Threat) -> bool:
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 def list_recent_threats(limit: int = 50,
@@ -237,7 +236,7 @@ def list_recent_threats(limit: int = 50,
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 def verify_threat_chain() -> Optional[int]:
@@ -257,7 +256,7 @@ def verify_threat_chain() -> Optional[int]:
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 # ── IntelSource / Mitigator contracts ──────────────────────────────────────

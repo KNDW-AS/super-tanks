@@ -16,12 +16,11 @@ Score changes:
   Decay: -0.5 per day (trust must be maintained through good behavior)
 """
 
-import json
 import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from core.db.connection import open_db
 
@@ -411,4 +410,4 @@ def _notify_level_change(agent_id: str, old_level: str, new_level: str, score: f
             timeout=8,
         )
     except Exception:
-        pass
+        logger.debug("Suppressed exception (non-critical path)", exc_info=True)

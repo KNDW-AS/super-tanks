@@ -450,7 +450,7 @@ def print_summary(report: dict):
         # Breakdown
         if overall["breakdown"]:
             print("    Score breakdown:")
-            print(f"      Baseline:                  70")
+            print("      Baseline:                  70")
             for name, delta in overall["breakdown"]:
                 sign = "+" if delta > 0 else ""
                 print(f"      {name:<28s} {sign}{delta}")
@@ -473,7 +473,7 @@ def print_summary(report: dict):
         if rate is not None:
             print(f"    GO-Gate: {rate:.1f}% approval ({gogate.get('approved', 0)}/{total})")
         else:
-            print(f"    GO-Gate: no data")
+            print("    GO-Gate: no data")
 
         # Tokens
         total_tokens = tokens.get("total_tokens", 0)

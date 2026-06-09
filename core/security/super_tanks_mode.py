@@ -507,7 +507,7 @@ def _send_telegram(text: str):
                 json={"chat_id": int(chat_id), "text": text}, timeout=8,
             )
     except Exception:
-        pass
+        logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 def _notify_mode_change(old_mode: TankMode, new_mode: TankMode):

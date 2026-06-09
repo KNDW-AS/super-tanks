@@ -51,7 +51,10 @@ import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from core.security.threat_intel import Threat
 
 logger = logging.getLogger("super_tanks.threat_monitor")
 

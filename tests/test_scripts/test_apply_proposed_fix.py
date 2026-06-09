@@ -2,7 +2,6 @@
 Tests for scripts/apply_proposed_fix.py.
 """
 
-import json
 
 import pytest
 

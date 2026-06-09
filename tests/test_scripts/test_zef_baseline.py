@@ -12,7 +12,6 @@ We monkeypatch the corpus and the filter so the test runs in a few ms
 and is independent of the live corpus contents.
 """
 
-import json
 import sys
 import types
 

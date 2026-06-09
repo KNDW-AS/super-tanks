@@ -3,10 +3,8 @@ Tests for core/security/aeris_response_templates.py.
 """
 
 import sys
-import time
 import types
 
-import pytest
 
 from core.security.threat_intel import Threat
 from core.security import aeris_response_templates as art

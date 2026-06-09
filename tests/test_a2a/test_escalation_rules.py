@@ -184,7 +184,6 @@ class TestVerifyOrDrop:
         assert er.verify_or_drop(msg) is None
 
     def test_forged_sender_dropped(self, monkeypatch):
-        from core.security import agent_identity
         from dataclasses import replace
         signed = self._signed_msg(monkeypatch)
         forged = replace(signed, sender="william")  # claim admin

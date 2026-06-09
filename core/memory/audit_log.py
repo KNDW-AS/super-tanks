@@ -163,7 +163,7 @@ def log_access(
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 # Public re-export for the proactive monitor.
@@ -185,7 +185,7 @@ def verify_audit_chain() -> Optional[int]:
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 def get_recent_access(limit: int = 100) -> List[Dict]:
@@ -213,4 +213,4 @@ def get_recent_access(limit: int = 100) -> List[Dict]:
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)

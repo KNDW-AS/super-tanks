@@ -7,7 +7,6 @@ Pins the invariants that make Cody a SAFE third agent:
   - trust level cap is junior or stricter
 """
 
-import pytest
 
 from core.security import cody_directives
 from core.security import tool_allowlists

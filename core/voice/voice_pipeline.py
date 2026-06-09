@@ -32,7 +32,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, List, Optional
 
-from core.diq.diq_voice import DIQVoiceSTT, DIQVoiceTTS, Transcript, Utterance
+from core.diq.diq_voice import DIQVoiceTTS, Transcript, Utterance
 from core.voice.room_router import speaker_for_room
 from core.voice.voice_profiles import get_voice_profile
 from core.voice.voice_security import VoiceIntent, vet_transcript

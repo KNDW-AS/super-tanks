@@ -311,8 +311,6 @@ class TestLevelChangeNotification:
     def test_called_on_level_drop(self, trust_db):
         # trust_db fixture provides the authority context.
         calls = []
-        import importlib
-        import contextvars
         trust_db._notify_level_change = lambda *a, **kw: calls.append(a)
         # aeris=70 standard → tripwire → 0 probation
         trust_db.record_event("aeris", "tripwire_access")

@@ -24,7 +24,7 @@ import asyncio
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # Optional watchdog for file monitoring
 try:
@@ -370,11 +370,10 @@ class QuarantineWatcher(FileSystemEventHandler):
             # Trust score penalty for failed quarantine scan
             try:
                 from core.security.trust_score import record_event, _TrustAuthority
-                agent = scan_result.issues[0].get("path", "zeph") if scan_result.issues else "zeph"
                 with _TrustAuthority():
                     record_event("zeph", "quarantine_fail", f"Proposal {proposal_id} failed scan")
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
             # If sandbox escape detected, send immediate Telegram alert
             if scan_result.violations:
@@ -386,7 +385,7 @@ class QuarantineWatcher(FileSystemEventHandler):
                 from core.security.super_tanks_mode import get_config_value
                 _auto_approve = get_config_value("quarantine_auto_approve") and scan_result.status == "pass"
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
             if _auto_approve:
                 self.storage.update_status(proposal_id, "auto_approved")

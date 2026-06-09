@@ -26,8 +26,7 @@ the registry dynamically. This is the operator control point.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Callable, List
+from typing import List
 
 from core.security.threat_intel import Threat
 from core.security.zeph_response_templates import ResponseTemplate

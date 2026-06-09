@@ -164,5 +164,5 @@ def build_morning_report() -> str:
             f"   Agent: {item['agent_id']} | Tid: {ts} | ID: {item['id']}"
         )
 
-    lines.append(f"\nGodkjenn alle: /approve-morning\nAvvis alle: /dismiss-morning")
+    lines.append("\nGodkjenn alle: /approve-morning\nAvvis alle: /dismiss-morning")
     return "\n".join(lines)

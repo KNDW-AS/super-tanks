@@ -24,7 +24,7 @@ must not be deployable.
 
 import ast
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Set
 
 logger = logging.getLogger("zeph.scanner.ast")
 

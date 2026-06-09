@@ -26,10 +26,9 @@ import hashlib
 import logging
 import secrets
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from core.db.connection import open_db
 
@@ -590,7 +589,7 @@ def check_curfew(user_id: str) -> Dict:
             return {"allowed": False, "reason": f"Curfew active (after {parsed})",
                     "goodnight": user.get("goodnight_message", "")}
     except Exception:
-        pass
+        logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
     return {"allowed": True, "reason": "Within allowed hours"}
 

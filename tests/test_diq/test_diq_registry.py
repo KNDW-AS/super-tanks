@@ -9,7 +9,7 @@ via monkeypatch so registration doesn't leak across tests.
 import pytest
 
 from core.diq import diq_registry as reg
-from core.diq.diq_tools import DIQTool, ToolRequest, ToolResponse
+from core.diq.diq_tools import DIQTool, ToolResponse
 
 
 class _Tool(DIQTool):

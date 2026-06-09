@@ -8,7 +8,6 @@ keyword-argument pass-through.
 
 import sqlite3
 
-import pytest
 
 from core.db.connection import open_db
 

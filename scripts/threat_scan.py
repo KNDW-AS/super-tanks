@@ -142,7 +142,7 @@ def main(argv=None) -> int:
         print(_format_digest(digest))
         if digest["zeph"] is not None:
             from core.security.threat_brief import (
-                BriefReport, format_brief, TriageDecision,
+                BriefReport, format_brief,
             )
             # Re-hydrate a BriefReport for the formatter.
             r = BriefReport(

@@ -55,7 +55,7 @@ def _step_check_souls(result: BootResult) -> None:
     """Soul-file hashes. On mismatch flips global SAFE_MODE but does
     not abort — the system stays up with a hobbled surface so William
     can review and unlock."""
-    from core.soul_guard import check_soul_integrity, is_safe_mode, get_safe_mode_reason
+    from core.soul_guard import check_soul_integrity, get_safe_mode_reason
     ok, _reason = check_soul_integrity()
     result.steps_completed.append("check_soul_integrity")
     if not ok:

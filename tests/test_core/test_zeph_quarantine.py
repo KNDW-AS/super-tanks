@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from core.zeph_quarantine import ZephScanner, SecurityScanResult
+from core.zeph_quarantine import ZephScanner
 
 
 @pytest.fixture

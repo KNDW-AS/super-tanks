@@ -2,11 +2,9 @@
 
 import asyncio
 import json
-from pathlib import Path
 
 import pytest
 
-from core.diq.diq_voice import Utterance
 from core.voice.backends.piper_tts import PiperTTSBackend
 
 

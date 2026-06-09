@@ -7,7 +7,6 @@ full hybrid pipeline with vector + RBAC + tripwire collaborators
 stubbed.
 """
 
-import json
 import struct
 import sys
 import types
@@ -237,7 +236,6 @@ class TestHybridSearchPipeline:
         monkeypatch.setattr(hs, "hierarchical_search",
                             lambda q, top_k=20: [])
 
-        from core.memory import access_control
         # Sensitive path blocked in autonomous mode → filtered out.
         from core.security import super_tanks_mode
         monkeypatch.setattr(super_tanks_mode, "get_mode",

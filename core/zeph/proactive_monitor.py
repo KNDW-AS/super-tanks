@@ -12,7 +12,6 @@ Three schedules:
 All checks are READ-ONLY — never modify system state.
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -20,7 +19,7 @@ import sqlite3
 import subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 try:
     from zoneinfo import ZoneInfo
@@ -241,7 +240,7 @@ def _check_log_errors() -> Dict[str, Any]:
             ["journalctl", "--since", "24 hours ago", "--no-pager", "-p", "err"],
             capture_output=True, text=True, timeout=30,
         )
-        lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
+        lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
         count = len(lines)
         level = "critical" if count > 100 else ("warning" if count > 20 else "ok")
         return {
@@ -418,7 +417,7 @@ def _check_failed_logins() -> Dict[str, Any]:
              "-u", "ssh", "--grep", "Failed password"],
             capture_output=True, text=True, timeout=30,
         )
-        lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
+        lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
         count = len(lines)
         return {
             "status": "warning" if count > 20 else "ok",

@@ -1,13 +1,10 @@
 """Tests for scripts/voice_discover.py."""
 
-import io
 import json
-import sys
 import types
 import urllib.error
 import urllib.request
 
-import pytest
 
 from scripts import voice_discover
 

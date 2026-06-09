@@ -13,12 +13,11 @@ Output is formatted as a report suitable for storing in /zeph/diagnostics/.
 All operations are READ-ONLY.
 """
 
-import json
 import logging
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 logger = logging.getLogger("zeph.self_diagnostic")
 
@@ -315,7 +314,7 @@ def _format_report(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         "=" * 60,
-        f"  ZEPH MONTHLY SELF-DIAGNOSTIC",
+        "  ZEPH MONTHLY SELF-DIAGNOSTIC",
         f"  Generated: {now}",
         "=" * 60,
         "",

@@ -6,8 +6,6 @@ __main__ entry point via the argparse path.
 """
 
 import importlib.util
-import io
-import json
 from pathlib import Path
 
 import pytest

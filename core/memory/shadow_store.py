@@ -136,7 +136,7 @@ def propose(
                     "l2_full": existing.l2_full,
                 }, ensure_ascii=False)
     except Exception:
-        pass
+        logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
     # Auto-approve rules. Confidence is agent-supplied, so it cannot
     # on its own be a permission gate — a compromised agent would
@@ -197,7 +197,7 @@ def propose(
         log_access(agent_id, "propose", path, detail_level=2,
                    mode="shadow", accessible=True)
     except Exception:
-        pass
+        logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
     logger.info(
         "[SHADOW] Proposal %s by %s: %s %s (confidence=%.1f, status=%s)",
@@ -289,7 +289,7 @@ def approve(branch_id: str, reviewed_by: str = "william") -> Dict[str, Any]:
         try:
             conn.rollback()
         except Exception:
-            pass
+            logger.debug("Suppressed exception (non-critical path)", exc_info=True)
         return {"success": False, "error": str(e)}
     finally:
         conn.close()

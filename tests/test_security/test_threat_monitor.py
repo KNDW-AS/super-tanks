@@ -143,7 +143,7 @@ class TestTripwireBurst:
             for _ in range(2)  # < THRESH_TRIPWIRE (3)
         ]
         from core.security import threat_monitor
-        r = threat_monitor.scan_once(now=_now())
+        threat_monitor.scan_once(now=_now())
         assert tm_env["set_mode_calls"] == []
 
     def test_above_threshold_flips_to_lockdown(self, tm_env):

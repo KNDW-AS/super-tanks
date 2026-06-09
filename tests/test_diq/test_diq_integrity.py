@@ -11,7 +11,6 @@ The module operates on its own filesystem layout, so we redirect
 import hashlib
 import json
 import shutil
-from pathlib import Path
 
 import pytest
 

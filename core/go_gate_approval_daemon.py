@@ -18,6 +18,8 @@ import requests
 from core.db.connection import open_db
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN  = os.getenv("AERIS_GOGATE_TELEGRAM_TOKEN")
 ADMIN_CHAT_ID   = int(os.getenv("AERIS_ADMIN_CHAT_ID", "0"))
 DB_PATH         = os.getenv("GOGATE_DB_PATH", "data/go_gate.db")
@@ -145,7 +147,8 @@ def commit_transaction(tx_id: str) -> bool:
             log.info(f"✅ tx_id={tx_id} → COMMITTED")
             # Oppdater også ask_admin ApprovalStore (det Zeph faktisk poller)
             try:
-                import sys, os
+                import sys
+                import os
                 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 from core.ask_admin import get_approval_store
                 store = get_approval_store()
@@ -162,13 +165,13 @@ def commit_transaction(tx_id: str) -> bool:
         try:
             conn.rollback()
         except Exception:
-            pass
+            logger.debug("Suppressed exception (non-critical path)", exc_info=True)
         return False
     finally:
         try:
             conn.close()
         except Exception:
-            pass
+            logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 def reject_transaction(tx_id: str) -> bool:
@@ -204,13 +207,13 @@ def reject_transaction(tx_id: str) -> bool:
         try:
             conn.rollback()
         except Exception:
-            pass
+            logger.debug("Suppressed exception (non-critical path)", exc_info=True)
         return False
     finally:
         try:
             conn.close()
         except Exception:
-            pass
+            logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 def get_pending_transactions() -> list:
@@ -386,7 +389,7 @@ def _handle_callback_query(cbq: dict) -> None:
         requests.post(f"{BASE_URL}/answerCallbackQuery",
                       json={"callback_query_id": cbq_id}, timeout=5)
     except Exception:
-        pass
+        logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
     if user_id != ADMIN_CHAT_ID:
         log.debug(f"Ignorerer callback fra user_id={user_id}")

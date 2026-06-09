@@ -12,7 +12,6 @@ Covers:
 
 import pytest
 
-from core.security import threat_brief as tb
 from core.security import threat_intel as ti
 from core.security.threat_intel import Threat, list_recent_threats
 from core.security.threat_brief import (
@@ -92,7 +91,8 @@ class TestDefaultEngine:
 class TestSanitisation:
     def test_zef_block_force_escalates_auto_act(self, store, monkeypatch):
         # Stub ZEF to BLOCK on the threat content.
-        import sys, types
+        import sys
+        import types
         fake_zef = types.ModuleType("core.security.zef_injection_filter")
 
         class _V:

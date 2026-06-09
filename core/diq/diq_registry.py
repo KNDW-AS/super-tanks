@@ -18,7 +18,7 @@ To wire A2A, Cloud, HA, Memory:
   Called once at gateway startup.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from core.diq.diq_tools import DIQTool
 from core.diq.diq_a2a import DIQA2AChannel

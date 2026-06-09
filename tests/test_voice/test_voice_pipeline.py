@@ -9,12 +9,12 @@ import asyncio
 import json
 import sys
 import types
-from typing import Any, Dict, List
+from typing import List
 
 import pytest
 
 from core.diq.diq_voice import Transcript, Utterance
-from core.voice import voice_pipeline, voice_security
+from core.voice import voice_pipeline
 
 
 class _StubTTS:

@@ -29,6 +29,17 @@ _gateway_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
+def mark_gateway_active() -> "contextvars.Token[bool]":
+    """Public API for core.gateway: mark the current task as a
+    gateway-originated dispatch. Returns the token for reset."""
+    return _gateway_active.set(True)
+
+
+def reset_gateway_active(token: "contextvars.Token[bool]") -> None:
+    """Public API for core.gateway: restore the previous state."""
+    _gateway_active.reset(token)
+
+
 @dataclass(frozen=True)
 class ToolRequest:
     """Immutable request object passed to every tool."""

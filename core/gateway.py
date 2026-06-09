@@ -31,7 +31,12 @@ import logging
 from typing import Any, Dict, Optional
 
 from core.diq.diq_registry import get_tool
-from core.diq.diq_tools import ToolRequest, ToolResponse, _gateway_active
+from core.diq.diq_tools import (
+    ToolRequest,
+    ToolResponse,
+    mark_gateway_active,
+    reset_gateway_active,
+)
 from core.security.dispatch_audit import (
     current_correlation_id,
     new_correlation_id,
@@ -199,11 +204,11 @@ async def _dispatch_inner(
     # Mark this dispatch as gateway-originated so DIQTool.execute()
     # accepts it. The ContextVar is per-task, so concurrent dispatches
     # don't pollute each other.
-    token = _gateway_active.set(True)
+    token = mark_gateway_active()
     try:
         resp = await tool.execute(request)
     finally:
-        _gateway_active.reset(token)
+        reset_gateway_active(token)
 
     # R-02: indirect prompt-injection scan on tool output. Web/file/
     # memory content can carry attacker instructions that ride back

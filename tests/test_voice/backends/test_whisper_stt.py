@@ -6,7 +6,6 @@ import math
 
 import pytest
 
-from core.voice.backends import whisper_stt
 from core.voice.backends.whisper_stt import (
     WhisperSTTBackend,
     _logprob_to_confidence,

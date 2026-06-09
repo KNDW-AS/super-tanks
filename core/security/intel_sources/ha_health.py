@@ -44,11 +44,11 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from core.security.threat_intel import (
     IntelSource, Threat,
-    SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH, SEVERITY_CRITICAL,
+    SEVERITY_MEDIUM, SEVERITY_HIGH, SEVERITY_CRITICAL,
 )
 
 logger = logging.getLogger("super_tanks.threat_intel.ha_health")

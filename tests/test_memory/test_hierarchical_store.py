@@ -8,7 +8,6 @@ and the empty-dir prune on delete.
 
 import json
 import threading
-from pathlib import Path
 
 import pytest
 

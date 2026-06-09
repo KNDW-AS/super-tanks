@@ -41,7 +41,6 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional
 
 from core.diq.diq_voice import Transcript
 

@@ -168,7 +168,7 @@ def record_dispatch(
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 def verify_dispatch_chain() -> Optional[int]:
@@ -188,7 +188,7 @@ def verify_dispatch_chain() -> Optional[int]:
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
 
 def get_dispatch_history(
@@ -235,4 +235,4 @@ def get_dispatch_history(
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)

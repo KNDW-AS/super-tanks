@@ -42,7 +42,6 @@ import asyncio
 import json
 import logging
 import os
-import shlex
 import shutil
 import tempfile
 from pathlib import Path
@@ -97,7 +96,7 @@ class PiperTTSBackend(DIQVoiceTTS):
             try:
                 Path(wav_path).unlink(missing_ok=True)
             except Exception:
-                pass
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
 
     def _resolve_model(
             self, voice_id: str,

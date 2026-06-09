@@ -14,10 +14,9 @@ import pytest
 
 from core.security import threat_intel as ti
 from core.security.threat_intel import (
-    Threat, ScanResult, IntelSource,
+    Threat, IntelSource,
     register_source, register_mitigator, scan_all,
     record_threat, list_recent_threats, verify_threat_chain,
-    SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH, SEVERITY_CRITICAL,
 )
 
 

@@ -56,7 +56,7 @@ def verify_or_drop(message) -> Optional["A2AMessage"]:
 try:
     from core.diq.diq_a2a import A2AMessage  # noqa: F401
 except Exception:
-    pass
+    _logger.debug("A2AMessage re-export unavailable (diq_a2a not importable)", exc_info=True)
 
 # ---------------------------------------------------------------------------
 # Trigger patterns — each is a (compiled_regex, human_label) tuple

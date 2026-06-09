@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "super-tanks"
+version = "3.2.0"
+description = "Open-source governance layer that makes autonomous AI agents safe in production — enforcement layers mapped to the OWASP Top 10 for Agentic Applications (2026) and the EU AI Act."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "William Louis Park", email = "kontakt@aeris.no" },
+]
+keywords = ["ai-agents", "governance", "security", "owasp", "eu-ai-act", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core runtime only — the governance layer itself.
+# Heavy/peripheral deps live in extras so `pip install super-tanks`
+# stays light for the developers we want to reach.
+dependencies = [
+    "requests>=2.32",
+    "psutil>=7.0",
+    "python-dotenv>=1.0",
+    "PyYAML>=6.0",
+    "aiohttp>=3.12",
+    "python-dateutil>=2.9",
+    "cryptography>=44.0",
+    "watchdog>=6.0",
+]
+
+[project.optional-dependencies]
+telegram = ["python-telegram-bot>=22.0"]
+llm = ["openai>=2.0", "google-genai>=1.0", "numpy>=2.0", "chromadb>=1.5"]
+smarthome = ["paho-mqtt>=2.1"]
+web = ["duckduckgo-search>=8.0", "playwright>=1.55", "beautifulsoup4>=4.13", "markdownify>=1.0"]
+voice = ["faster-whisper>=1.2", "sounddevice>=0.5", "torch>=2.6"]
+dev = [
+    "pytest>=9.0",
+    "pytest-asyncio>=1.3",
+    "pytest-timeout>=2.4",
+    "pytest-cov>=7.0",
+    "ruff>=0.9",
+    "pre-commit>=4.0",
+]
+all = ["super-tanks[telegram,llm,smarthome,web,voice]"]
+
+[project.urls]
+Homepage = "https://github.com/billyxp74/super-tanks"
+Issues = "https://github.com/billyxp74/super-tanks/issues"
+
+[tool.setuptools.packages.find]
+include = ["core*", "scripts*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",  # line length — handsama pragmatisk, ikkje dogmatisk
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Medvitne seine importar med forklarande kommentar i kjelda:
+"core/security/trust_score.py" = ["E402"]
+"scripts/independent_review.py" = ["E402"]
+

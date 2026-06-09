@@ -84,7 +84,6 @@ def _t_rebaseline_minor_zef_drift(threat: Threat) -> str:
     block AUTONOMOUS forever on a tiny shift. CRITICAL drifts do NOT
     take this path — they escalate to William.
     """
-    fingerprint = threat.fingerprint
     metric = threat.details.get("metric", "")
     # Only act on block_rate / warn_rate slippage. FPR slippage means
     # the filter is mis-blocking real users — that's not "drift", that's

@@ -36,7 +36,7 @@ class TestQueueAction:
         # are monotonic on insertion. If somebody swapped the ORDER BY
         # to `id` the test would still pass. Backdate one of the rows
         # to verify ORDER BY queued_at actually applies.
-        first = night_queue_db.queue_action("zeph", "tool_a", {"i": 0})
+        night_queue_db.queue_action("zeph", "tool_a", {"i": 0})
         second = night_queue_db.queue_action("zeph", "tool_b", {"i": 1})
         # Backdate the second-inserted row so its queued_at is the
         # oldest. ORDER BY queued_at must then put it first.

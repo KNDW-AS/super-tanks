@@ -4,7 +4,6 @@ Tests for core/security/intel_sources/osv.py.
 Network is mocked at the _OSVHTTP boundary; no live calls.
 """
 
-import pytest
 
 from core.security.intel_sources.osv import (
     OSVDepSource, _osv_severity_to_threat,

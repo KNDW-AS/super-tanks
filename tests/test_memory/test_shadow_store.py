@@ -8,7 +8,6 @@ default root is redirected to tmp, and hybrid_search embedding generation
 is stubbed.
 """
 
-import json
 import sys
 import types
 from datetime import datetime, timedelta, timezone

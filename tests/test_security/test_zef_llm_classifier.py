@@ -7,7 +7,6 @@ involved.
 """
 
 import asyncio
-import io
 import json
 
 import pytest

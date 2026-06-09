@@ -7,9 +7,7 @@ subprocess, and various DBs/manifests — we stub them so each branch
 
 import sys
 import types
-from datetime import datetime, timezone
 
-import pytest
 
 from core.zeph import proactive_monitor as pm
 

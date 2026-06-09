@@ -9,7 +9,6 @@ monkeypatching the script's *_DB module constants.
 import importlib.util
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
