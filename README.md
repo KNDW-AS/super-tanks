@@ -13,6 +13,11 @@
 
 Not a detection tool that reacts after something goes wrong. 10 simultaneous security layers that prevent it from happening in the first place.
 
+<p align="center">
+  <img src="docs/assets/go-gate-demo.gif" width="700" alt="GO-Gate demo: an agent's tool call is paused fail-closed, a human approves one call and denies another">
+</p>
+<p align="center"><sub>GO-Gate in action — reproduce it yourself: <code>python3 scripts/demo_go_gate.py</code></sub></p>
+
 ```bash
 git clone https://github.com/kndw-as/super-tanks.git
 cd super-tanks
