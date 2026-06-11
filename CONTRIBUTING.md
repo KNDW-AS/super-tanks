@@ -5,7 +5,7 @@ Thanks for considering a contribution. Super Tanks is compliance-by-design infra
 ## Quick start
 
 ```bash
-git clone https://github.com/billyxp74/super-tanks
+git clone https://github.com/kndw-as/super-tanks
 cd super-tanks
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt

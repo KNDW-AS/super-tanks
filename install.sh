@@ -3,7 +3,7 @@
 # Usage: curl -sSL https://aeris.no/install.sh | bash
 set -e
 
-REPO="https://github.com/billyxp74/super-tanks.git"
+REPO="https://github.com/kndw-as/super-tanks.git"
 INSTALL_DIR="$HOME/super-tanks"
 PORT=8765
 

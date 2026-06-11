@@ -27,7 +27,7 @@ def speak_openrouter(prompt: str, system_prompt: str = "", *,
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {key}",
-            "HTTP-Referer": "https://github.com/billyxp74/super-tanks",
+            "HTTP-Referer": "https://github.com/kndw-as/super-tanks",
             "X-Title": "Super Tanks Council",
         },
         method="POST",

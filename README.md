@@ -1,6 +1,6 @@
 # Super Tanks v3.2
 
-[![CI](https://github.com/billyxp74/super-tanks/actions/workflows/tests.yml/badge.svg)](https://github.com/billyxp74/super-tanks/actions/workflows/tests.yml)
+[![CI](https://github.com/kndw-as/super-tanks/actions/workflows/tests.yml/badge.svg)](https://github.com/kndw-as/super-tanks/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![OWASP Agentic Top 10 (2026)](https://img.shields.io/badge/OWASP-Agentic_Top_10_2026-1f6feb.svg)](#owasp-top-10-for-agentic-applications-asi-2026)
 [![Tests](https://img.shields.io/badge/tests-1398_passing-success.svg)](#)
@@ -10,7 +10,7 @@
 Not a detection tool that reacts after something goes wrong. 10 simultaneous security layers that prevent it from happening in the first place.
 
 ```bash
-git clone https://github.com/billyxp74/super-tanks.git
+git clone https://github.com/kndw-as/super-tanks.git
 cd super-tanks
 less install.sh        # review the script before running it
 ./install.sh
@@ -111,7 +111,7 @@ a machine you control — a Linux server or desktop is the primary target.
 
 ### Linux (primary)
 ```bash
-git clone https://github.com/billyxp74/super-tanks.git
+git clone https://github.com/kndw-as/super-tanks.git
 cd super-tanks
 less install.sh        # review the script before running it
 ./install.sh

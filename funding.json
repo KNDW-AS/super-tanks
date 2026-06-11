@@ -17,11 +17,11 @@
       "name": "Super Tanks",
       "description": "Compliance-by-design security and governance architecture for autonomous AI agents. Ten simultaneous enforcement layers control what AI agents can and cannot do at the architectural level — every action is mediated before it reaches a tool, model, or the outside world. Built against the OWASP Top 10 for Agentic Applications (2026) and the EU AI Act. Runs locally/offline, every decision logged, Apache 2.0.",
       "webpageUrl": {
-        "url": "https://github.com/billyxp74/super-tanks"
+        "url": "https://github.com/kndw-as/super-tanks"
       },
       "repositoryUrl": {
-        "url": "https://github.com/billyxp74/super-tanks",
-        "wellKnown": "https://github.com/billyxp74/super-tanks/blob/main/funding.json"
+        "url": "https://github.com/kndw-as/super-tanks",
+        "wellKnown": "https://github.com/kndw-as/super-tanks/blob/main/funding.json"
       },
       "licenses": [
         "spdx:Apache-2.0"

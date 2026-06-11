@@ -33,7 +33,7 @@ incident table for the specific layer that addresses each.
 ## Install
 
 ```bash
-git clone https://github.com/billyxp74/super-tanks.git
+git clone https://github.com/kndw-as/super-tanks.git
 cd super-tanks
 less install.sh        # review the script before running it
 ./install.sh

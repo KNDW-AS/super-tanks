@@ -55,8 +55,8 @@ dev = [
 all = ["super-tanks[telegram,llm,smarthome,web,voice]"]
 
 [project.urls]
-Homepage = "https://github.com/billyxp74/super-tanks"
-Issues = "https://github.com/billyxp74/super-tanks/issues"
+Homepage = "https://github.com/kndw-as/super-tanks"
+Issues = "https://github.com/kndw-as/super-tanks/issues"
 
 [tool.setuptools.packages.find]
 include = ["core*", "scripts*"]
