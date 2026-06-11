@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.svg" width="140" alt="Super Tanks logo">
+</p>
+
 # Super Tanks v3.2
 
 [![CI](https://github.com/kndw-as/super-tanks/actions/workflows/tests.yml/badge.svg)](https://github.com/kndw-as/super-tanks/actions/workflows/tests.yml)
