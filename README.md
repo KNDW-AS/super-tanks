@@ -113,6 +113,13 @@ The obligations are coming, and preparing for them takes time. Super Tanks aims 
 
 This is compliance-by-design, not compliance-by-audit: the controls exist before the deployment, not after.
 
+## Further mappings
+
+Beyond OWASP, MITRE ATLAS, and the EU AI Act above, Super Tanks publishes two more standards mappings:
+
+- **[Agent Control Specification (ACS)](docs/ACS_MAPPING.md)** — how the 10 layers cover the ACS five runtime checkpoints (input, LLM, state, tool execution, output).
+- **[NIST AI governance](docs/COMPLIANCE_NIST.md)** — AI RMF (GOVERN/MAP/MEASURE/MANAGE), AI 600-1 GenAI Profile, and the emerging IR 8596 Cyber AI Profile / COSAiS agentic overlays.
+
 ## Install
 
 Super Tanks is a server-side framework (Docker + Python + Ollama). It installs on
