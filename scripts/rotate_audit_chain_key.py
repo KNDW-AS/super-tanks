@@ -24,7 +24,12 @@ For each chained table it:
      full history verifiable going forward.
 
 Also chains any legacy rows in trust_events / approval_events that
-pre-date those tables' chaining.
+pre-date those tables' chaining (adding the hmac column if the DB
+pre-dates it).
+
+Safe to re-run: a second run re-chains under the same new key, but its
+step-1 pre-check will then warn (the rows are no longer under the OLD
+key). Only the first run's pre-check says anything about history.
 """
 
 import sqlite3
@@ -117,6 +122,19 @@ def main() -> int:
             if not columns:
                 print(f"— {table}: no such table in {db_path.name}, skipping")
                 continue
+
+            # DBs from before a table was chained may lack the hmac
+            # column entirely (the app adds it on next boot). Add it
+            # here so those legacy rows get chained too.
+            has_hmac = any(
+                r[1] == "hmac"
+                for r in conn.execute(f"PRAGMA table_info({table})")
+            )
+            if not has_hmac:
+                conn.execute(f"ALTER TABLE {table} "
+                             f"ADD COLUMN hmac TEXT NOT NULL DEFAULT ''")
+                conn.commit()
+                print(f"  {table}: added missing hmac column")
 
             first_bad, empty = _verify_with_key(conn, table, columns, old_key)
             if first_bad is not None:
