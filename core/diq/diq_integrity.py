@@ -11,6 +11,8 @@ Same philosophy as soul_guard.py — frozen files prove their own integrity.
 import hashlib
 import json
 import logging
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
@@ -43,12 +45,56 @@ def compute_checksums() -> Dict[str, str]:
     return {name: _sha256(_DIQ_DIR / name) for name in FROZEN_FILES}
 
 
+def _git_commit() -> str:
+    """Best-effort short commit hash for seal provenance."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_DIQ_DIR), capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _parse_manifest(raw: dict) -> tuple:
+    """Return (files: Dict[str, str], meta: dict).
+
+    Supports both the sealed format {"meta": {...}, "files": {...}}
+    and the legacy flat {name: hash} format (meta comes back empty —
+    rollback protection inactive until re-sealed).
+    """
+    if "files" in raw and isinstance(raw["files"], dict):
+        return raw["files"], raw.get("meta", {})
+    return raw, {}
+
+
 def write_checksums() -> None:
-    """Write current checksums to DIQ_CHECKSUMS.json. Run once after contract validation."""
-    checksums = compute_checksums()
-    _CHECKSUMS_FILE.write_text(json.dumps(checksums, indent=2))
-    logger.info("DIQ checksums written to %s", _CHECKSUMS_FILE)
-    for name, digest in checksums.items():
+    """Write current checksums to DIQ_CHECKSUMS.json. Run once after contract validation.
+
+    Re-sealing bumps `meta.generation` — the anti-rollback counter that
+    verify_diq_integrity checks against the deployment's floor.
+    """
+    old_generation = 0
+    if _CHECKSUMS_FILE.exists():
+        try:
+            _, old_meta = _parse_manifest(json.loads(_CHECKSUMS_FILE.read_text()))
+            old_generation = int(old_meta.get("generation", 0))
+        except Exception:
+            logger.warning("Existing DIQ_CHECKSUMS.json unreadable — generation restarts at 1")
+
+    manifest = {
+        "meta": {
+            "generation": old_generation + 1,
+            "sealed_at": datetime.now(timezone.utc).isoformat(),
+            "git_commit": _git_commit(),
+        },
+        "files": compute_checksums(),
+    }
+    _CHECKSUMS_FILE.write_text(json.dumps(manifest, indent=2))
+    logger.info("DIQ checksums written to %s (generation %d)",
+                _CHECKSUMS_FILE, manifest["meta"]["generation"])
+    for name, digest in manifest["files"].items():
         logger.info("  %s  %s", digest[:16], name)
 
 
@@ -70,8 +116,23 @@ def verify_diq_integrity() -> None:
             "the frozen contract files."
         )
 
-    expected: Dict[str, str] = json.loads(_CHECKSUMS_FILE.read_text())
+    expected, meta = _parse_manifest(json.loads(_CHECKSUMS_FILE.read_text()))
     failures = []
+
+    # Anti-rollback (STA-01 Threat 05): a manifest that matches its
+    # files can still be a restored stale seal with weaker contracts.
+    generation = meta.get("generation")
+    if isinstance(generation, int):
+        from core.security.integrity_floor import check_and_update
+        rollback = check_and_update("diq", generation)
+        if rollback:
+            failures.append(f"ROLLBACK: {rollback}")
+    else:
+        logger.warning(
+            "DIQ_CHECKSUMS.json has no meta.generation — legacy manifest, "
+            "rollback protection inactive. Re-seal with "
+            "diq_integrity.write_checksums() to enable it."
+        )
 
     for name in FROZEN_FILES:
         path = _DIQ_DIR / name

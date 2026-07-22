@@ -36,6 +36,8 @@ def tm_env(monkeypatch, tmp_path):
         "safe_mode_entries": [],
         "dispatch_chain_tampered_id": None,
         "memory_chain_tampered_id": None,
+        "trust_chain_tampered_id": None,
+        "approval_chain_tampered_id": None,
     }
 
     # ── dispatch_audit ──
@@ -83,7 +85,13 @@ def tm_env(monkeypatch, tmp_path):
     def _set_score(agent, score, reason=""):
         state["trust_set_calls"].append((agent, score, reason))
     fake_ts.set_score = _set_score
+    fake_ts.verify_trust_chain = lambda: state["trust_chain_tampered_id"]
     monkeypatch.setitem(sys.modules, "core.security.trust_score", fake_ts)
+
+    # ── ask_admin ──
+    fake_aa = types.ModuleType("core.ask_admin")
+    fake_aa.verify_approval_chain = lambda: state["approval_chain_tampered_id"]
+    monkeypatch.setitem(sys.modules, "core.ask_admin", fake_aa)
 
     # ── soul_guard ──
     fake_sg = types.ModuleType("core.soul_guard")
@@ -215,6 +223,21 @@ class TestChainTamper:
         r = threat_monitor.scan_once(now=_now())
         assert any("P5" in f and "7" in f for f in r.findings)
         assert any("memory_access_log" in s
+                   for s in tm_env["safe_mode_entries"])
+
+    def test_trust_chain_break_enters_safe_mode(self, tm_env):
+        tm_env["trust_chain_tampered_id"] = 3
+        from core.security import threat_monitor
+        r = threat_monitor.scan_once(now=_now())
+        assert any("P6" in f and "3" in f for f in r.findings)
+        assert any("trust_events" in s for s in tm_env["safe_mode_entries"])
+
+    def test_approval_chain_break_enters_safe_mode(self, tm_env):
+        tm_env["approval_chain_tampered_id"] = 9
+        from core.security import threat_monitor
+        r = threat_monitor.scan_once(now=_now())
+        assert any("P7" in f and "9" in f for f in r.findings)
+        assert any("approval_events" in s
                    for s in tm_env["safe_mode_entries"])
 
     def test_clean_chains_no_safe_mode(self, tm_env):

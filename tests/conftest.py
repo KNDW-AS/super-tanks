@@ -16,6 +16,28 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _integrity_floor_isolated(tmp_path_factory, monkeypatch):
+    """Point the anti-rollback floor file at a per-test tmp path so
+    tests neither write data/.integrity_floor.json in the working tree
+    nor leak generation state into each other."""
+    from core.security import integrity_floor
+    floor = tmp_path_factory.mktemp("floor") / ".integrity_floor.json"
+    monkeypatch.setattr(integrity_floor, "FLOOR_FILE", floor)
+
+
+@pytest.fixture(autouse=True)
+def _audit_key_isolated(monkeypatch):
+    """Deterministic audit-chain key for every test.
+
+    Without this, the first chained write in a test run would generate
+    and persist data/.audit_chain_key in the working tree. Tests that
+    exercise audit_key's own load/generate logic override _KEY and the
+    key-file path themselves."""
+    from core.security import audit_key
+    monkeypatch.setattr(audit_key, "_KEY", b"test-audit-chain-key")
+
+
 @pytest.fixture
 def user_db(tmp_path, monkeypatch):
     """Provide a fresh, isolated users.db for each test."""

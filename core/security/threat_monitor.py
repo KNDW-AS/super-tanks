@@ -257,8 +257,8 @@ def _detect_zef_burst(report: MonitorReport, now: datetime) -> None:
 
 
 def _detect_chain_tampering(report: MonitorReport, now: datetime) -> None:
-    """P4 + P5: walk the audit-chain HMACs. A mismatch means an
-    attacker (or a bug) has modified rows post-write. Both are SAFE
+    """P4–P7: walk the audit-chain HMACs. A mismatch means an
+    attacker (or a bug) has modified rows post-write. All are SAFE
     MODE-level events.
 
     SAFE_MODE is sticky — once entered, only the operator can clear
@@ -269,6 +269,10 @@ def _detect_chain_tampering(report: MonitorReport, now: datetime) -> None:
          "core.security.dispatch_audit:verify_dispatch_chain"),
         ("memory_access_log", "P5 memory_chain_tampered",
          "core.memory.audit_log:verify_audit_chain"),
+        ("trust_events", "P6 trust_chain_tampered",
+         "core.security.trust_score:verify_trust_chain"),
+        ("approval_events", "P7 approval_chain_tampered",
+         "core.ask_admin:verify_approval_chain"),
     ]
     for table, label, dotted in pairs:
         try:

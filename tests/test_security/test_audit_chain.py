@@ -13,9 +13,9 @@ import pytest
 @pytest.fixture
 def chain_env(tmp_path, monkeypatch):
     """Return audit_chain plus a tmp DB with a tiny chain table."""
-    from core.security import agent_identity, audit_chain
+    from core.security import audit_chain, audit_key
 
-    monkeypatch.setattr(agent_identity, "_KEY", b"test-key-for-chain")
+    monkeypatch.setattr(audit_key, "_KEY", b"test-key-for-chain")
     db = tmp_path / "chain.db"
     conn = sqlite3.connect(str(db))
     conn.execute("""
@@ -112,8 +112,8 @@ class TestChainEnd2End:
 class TestAuditLogIntegration:
     def test_round_trip_with_chain(self, tmp_path, monkeypatch):
         from core.memory import audit_log
-        from core.security import agent_identity
-        monkeypatch.setattr(agent_identity, "_KEY", b"test-audit-key")
+        from core.security import audit_key
+        monkeypatch.setattr(audit_key, "_KEY", b"test-audit-key")
         monkeypatch.setattr(audit_log, "DB_PATH", tmp_path / "audit.db")
         monkeypatch.setattr(audit_log, "_initialised", False)
 
@@ -126,8 +126,8 @@ class TestAuditLogIntegration:
 
     def test_tampered_audit_row_detected(self, tmp_path, monkeypatch):
         from core.memory import audit_log
-        from core.security import agent_identity
-        monkeypatch.setattr(agent_identity, "_KEY", b"test-audit-key-2")
+        from core.security import audit_key
+        monkeypatch.setattr(audit_key, "_KEY", b"test-audit-key-2")
         monkeypatch.setattr(audit_log, "DB_PATH", tmp_path / "audit.db")
         monkeypatch.setattr(audit_log, "_initialised", False)
 
@@ -257,7 +257,7 @@ class TestCheckpoint:
         # earlier checkpoint still wins.
         conn.execute("DELETE FROM log WHERE id > 1")
         conn.execute(
-            f"INSERT INTO log_checkpoint "
+            "INSERT INTO log_checkpoint "
             "(ts, max_row_id, head_hmac, count, hmac) "
             "VALUES (?, ?, ?, ?, ?)",
             ("forged-ts", 1, "whatever", 1, "deadbeef" * 8))
@@ -282,8 +282,8 @@ class TestCheckpoint:
 
 class TestDispatchAuditIntegration:
     def test_round_trip_with_chain(self, tmp_path, monkeypatch):
-        from core.security import dispatch_audit, agent_identity
-        monkeypatch.setattr(agent_identity, "_KEY", b"test-dispatch-key")
+        from core.security import dispatch_audit, audit_key
+        monkeypatch.setattr(audit_key, "_KEY", b"test-dispatch-key")
         monkeypatch.setattr(dispatch_audit, "DB_PATH", tmp_path / "dispatch.db")
         monkeypatch.setattr(dispatch_audit, "_initialised", False)
 
@@ -296,8 +296,8 @@ class TestDispatchAuditIntegration:
         assert dispatch_audit.verify_dispatch_chain() is None
 
     def test_tampered_dispatch_row_detected(self, tmp_path, monkeypatch):
-        from core.security import dispatch_audit, agent_identity
-        monkeypatch.setattr(agent_identity, "_KEY", b"test-dispatch-key-2")
+        from core.security import dispatch_audit, audit_key
+        monkeypatch.setattr(audit_key, "_KEY", b"test-dispatch-key-2")
         monkeypatch.setattr(dispatch_audit, "DB_PATH", tmp_path / "dispatch.db")
         monkeypatch.setattr(dispatch_audit, "_initialised", False)
 

@@ -61,7 +61,9 @@ In scope:
   - Trust scoring (`core/security/trust_score.py`)
   - PIN auth (`core/security/user_manager.py`)
   - Soul integrity / DIQ frozen contracts (`core/soul_guard.py`,
-    `core/diq/diq_integrity.py`)
+    `core/diq/diq_integrity.py`, `core/security/integrity_floor.py`)
+  - Tamper-evident audit chains (`core/security/audit_chain.py`,
+    `core/security/audit_key.py`, `core/security/dispatch_audit.py`)
   - Code-proposal sandbox scan (`core/zeph_quarantine.py`,
     `core/zeph_quarantine_ast.py`)
   - Bootstrap (`core/bootstrap.py`)
@@ -134,21 +136,27 @@ are welcome.
 
 - **Integrity manifests are stored in the same filesystem as the files
   they protect.** An attacker with write access to `core/` can update
-  both `aeris_soul.py` and `core/soul_integrity.json` atomically. A future
-  release will sign both manifests with an offline key (or store the
-  digest in a TPM/HSM).
+  both `aeris_soul.py` and `core/soul_integrity.json` atomically.
+  Rollback to an older-but-valid sealed state is now caught (manifests
+  carry `meta.generation`, checked against a deployment floor in
+  `core/security/integrity_floor.py`), but same-filesystem forgery is
+  not. A future release will sign both manifests with an offline key
+  (or store the digest in a TPM/HSM).
 - **The ZEF LLM classifier fails OPEN** when Ollama is unreachable. The
   primary regex filter still runs.
-- **Tool outputs are not re-scanned for indirect prompt injection** before
-  being re-fed to the LLM context. Memory poisoning via a `web_browse`
-  result is the canonical attack vector.
+- **Tool-output re-scanning is pattern-based.** The gateway re-scans
+  tool output before LLM re-injection (high-confidence injection is
+  redacted; WARN-level content is tagged `untrusted_content`), but
+  semantic or encoded payloads that no regex/normalisation pattern
+  matches can still pass. Corpus expansion is the open follow-up (R-02).
 - **No runtime sandbox** wraps approved code. The AST scan is the only
   gate; once `pending_review` becomes `approved`, the change is applied
-  to the live tree.
-- **A2A message signing exists** (`core.security.agent_identity`
-  `sign_a2a_message` / `verify_a2a_message`) but the
-  production wiring that calls `verify_a2a_message` lives outside this
-  repository (`core/a2a/` only contains `escalation_rules.py`).
+  to the live tree. The pip dependency-upgrade path likewise runs
+  without separate containment (R-04).
+- **A2A verification is wired in-repo but the runtime lives outside.**
+  `verify_a2a_message` is invoked in `core/a2a/escalation_rules.py`
+  (unsigned/invalid messages are dropped); out-of-tree runtime
+  components must call it on every receive path too.
 
 ## Contact
 

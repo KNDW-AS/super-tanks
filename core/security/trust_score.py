@@ -20,7 +20,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from core.db.connection import open_db
 
@@ -120,9 +120,17 @@ def _init_db():
             score_change REAL NOT NULL,
             score_before REAL NOT NULL,
             score_after REAL NOT NULL,
-            details TEXT
+            details TEXT,
+            hmac TEXT NOT NULL DEFAULT ''
         )
     """)
+    # Migration for existing DBs that pre-date the chain column.
+    import sqlite3 as _sqlite3
+    try:
+        conn.execute("SELECT hmac FROM trust_events LIMIT 0")
+    except _sqlite3.OperationalError:
+        conn.execute("ALTER TABLE trust_events ADD COLUMN hmac TEXT NOT NULL DEFAULT ''")
+        logger.info("[TRUST] Migrated: added hmac column to trust_events")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_te_agent ON trust_events(agent_id, timestamp DESC)")
     conn.commit()
     conn.close()
@@ -274,12 +282,16 @@ def record_event(agent_id: str, event_type: str, details: str = "") -> Dict:
             (agent_id, score_after, new_level, now,
              score_after, new_level, now),
         )
-        conn.execute(
-            "INSERT INTO trust_events "
-            "(timestamp, agent_id, event_type, score_change, score_before, score_after, details) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (now, agent_id, event_type, change, score_before, score_after, details),
-        )
+        from core.security.audit_chain import append_chained_in_txn
+        append_chained_in_txn(conn, "trust_events", {
+            "timestamp": now,
+            "agent_id": agent_id,
+            "event_type": event_type,
+            "score_change": change,
+            "score_before": score_before,
+            "score_after": score_after,
+            "details": details,
+        })
         conn.commit()
     finally:
         conn.close()
@@ -314,13 +326,16 @@ def set_score(agent_id: str, new_score: float, reason: str = "Manual adjustment"
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_conn()
     try:
-        conn.execute(
-            "INSERT INTO trust_events "
-            "(timestamp, agent_id, event_type, score_change, score_before, score_after, details) "
-            "VALUES (?, ?, 'manual_adjust', ?, ?, ?, ?)",
-            (now, agent_id, new_score - old_score, old_score, new_score, reason),
-        )
-        conn.commit()
+        from core.security.audit_chain import append_chained
+        append_chained(conn, "trust_events", {
+            "timestamp": now,
+            "agent_id": agent_id,
+            "event_type": "manual_adjust",
+            "score_change": new_score - old_score,
+            "score_before": old_score,
+            "score_after": new_score,
+            "details": reason,
+        })
     finally:
         conn.close()
 
@@ -337,6 +352,21 @@ def set_score(agent_id: str, new_score: float, reason: str = "Manual adjustment"
         )
         _notify_level_change(agent_id, old_level, new_level, new_score,
                              f"manual_adjust:{reason}")
+
+
+def verify_trust_chain() -> Optional[int]:
+    """Return None if the trust_events chain is clean, else the id of
+    the first tampered row. Called by the threat monitor (P6)."""
+    conn = _get_conn()
+    try:
+        from core.security.audit_chain import verify_chain
+        return verify_chain(
+            conn, "trust_events",
+            ["timestamp", "agent_id", "event_type", "score_change",
+             "score_before", "score_after", "details"],
+        )
+    finally:
+        conn.close()
 
 
 def get_event_history(agent_id: str, limit: int = 50) -> List[Dict]:

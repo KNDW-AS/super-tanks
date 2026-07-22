@@ -213,3 +213,48 @@ class TestTelegramAlert:
         assert payload["chat_id"] == "55"
         assert payload["text"] == "hello"
         assert payload["parse_mode"] == "Markdown"
+
+
+# ── Anti-rollback (meta.generation floor) ──────────────────────────────────
+
+class TestSoulRollback:
+    def _write_manifest(self, env, generation):
+        manifest = json.loads(env.manifest_path.read_text())
+        manifest["meta"] = {"generation": generation,
+                           "sealed_at": "2026-07-22T00:00:00+00:00",
+                           "git_commit": "abc1234"}
+        env.manifest_path.write_text(json.dumps(manifest))
+
+    def _reset_safe_mode(self, env):
+        env.sg.SOUL_SAFE_MODE = False
+        env.sg.SOUL_SAFE_MODE_REASON = ""
+
+    def test_sealed_generation_accepted_and_floor_advances(self, soul_env):
+        self._write_manifest(soul_env, 3)
+        ok, _ = soul_env.sg.check_soul_integrity()
+        assert ok is True
+        # Same generation again is still fine.
+        self._reset_safe_mode(soul_env)
+        ok, _ = soul_env.sg.check_soul_integrity()
+        assert ok is True
+
+    def test_rollback_to_older_generation_enters_safe_mode(self, soul_env):
+        self._write_manifest(soul_env, 3)
+        assert soul_env.sg.check_soul_integrity()[0] is True
+
+        # Restore of an older sealed state: hashes still match the
+        # files on disk, only the generation is older.
+        self._reset_safe_mode(soul_env)
+        self._write_manifest(soul_env, 2)
+        ok, reason = soul_env.sg.check_soul_integrity()
+        assert ok is False
+        assert "ROLLBACK" in reason
+        assert soul_env.sg.is_safe_mode() is True
+        assert len(soul_env.alerts) == 1
+
+    def test_legacy_manifest_without_meta_still_ok(self, soul_env):
+        # The fixture writes a meta-less manifest — rollback protection
+        # inactive, but boot must not fail.
+        ok, reason = soul_env.sg.check_soul_integrity()
+        assert ok is True
+        assert reason == "ok"

@@ -7,7 +7,7 @@
 [![CI](https://github.com/kndw-as/super-tanks/actions/workflows/tests.yml/badge.svg)](https://github.com/kndw-as/super-tanks/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![OWASP Agentic Top 10 (2026)](https://img.shields.io/badge/OWASP-Agentic_Top_10_2026-1f6feb.svg)](#owasp-top-10-for-agentic-applications-asi-2026)
-[![Tests](https://img.shields.io/badge/tests-1398_passing-success.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1436_passing-success.svg)](#)
 
 **The governance layer that makes AI autonomy possible.**
 

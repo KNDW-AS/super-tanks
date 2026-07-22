@@ -1,3 +1,31 @@
+# Unreleased (v3.3) — evidence-integrity hardening
+
+Hardening pass driven by the published 7ASecurity STA-01 threat model
+(Threats 05 and 06). 1,436 tests green.
+
+- **Dedicated audit-chain key** (`core/security/audit_key.py`,
+  `data/.audit_chain_key` / `SUPER_TANKS_AUDIT_KEY`): chain HMACs no
+  longer share key material with identity tokens — one stolen key can
+  no longer both forge agent identity and rewrite evidence.
+  **Existing deployments must run `scripts/rotate_audit_chain_key.py`
+  once after upgrading**, otherwise the threat monitor flags
+  pre-upgrade rows as tampered and forces SAFE_MODE.
+- **Chained trust + approval evidence**: `trust_events` rows and a new
+  append-only `approval_events` transition log (created / approved /
+  denied / expired) are HMAC-chained like dispatch/memory/threat rows.
+  An approval status flip commits atomically with its evidence row.
+  Threat monitor gains P6/P7 chain checks → SAFE_MODE on a break.
+- **Anti-rollback for integrity manifests**: `soul_integrity.json` and
+  `DIQ_CHECKSUMS.json` now carry `meta.generation` (+ seal timestamp
+  and git commit); boot compares against a monotonic deployment floor
+  (`data/.integrity_floor.json`). Restoring an older-but-valid sealed
+  state fails integrity. New sealing tool: `scripts/seal_souls.py`;
+  `diq_integrity.write_checksums()` bumps the generation. Legacy
+  flat manifests still verify (warning only) until re-sealed.
+- Docs synchronized with implemented controls (RISK_REGISTER residuals
+  for R-02/05/06/12/14/20/21, SECURITY.md known limitations,
+  SYSTEM_CARD v3.3).
+
 # Super Tanks v3.2.0 — first public release
 
 A compliance-by-design governance framework for autonomous AI agents. Instead of

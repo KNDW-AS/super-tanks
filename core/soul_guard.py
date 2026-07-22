@@ -112,6 +112,24 @@ def check_soul_integrity() -> Tuple[bool, str]:
         else:
             logger.info(f"[SOUL_GUARD] {name}: ✅ integrity verified")
 
+    # Anti-rollback: a manifest that hashes clean can still be a stale
+    # restore of an older sealed state (STA-01 Threat 05). Sealed
+    # manifests carry meta.generation; refuse to accept one older than
+    # what this deployment has already seen.
+    meta = manifest.get("meta", {})
+    generation = meta.get("generation")
+    if isinstance(generation, int):
+        from core.security.integrity_floor import check_and_update
+        rollback = check_and_update("soul", generation)
+        if rollback:
+            violations.append(f"  • ROLLBACK: {rollback}")
+    else:
+        logger.warning(
+            "[SOUL_GUARD] soul_integrity.json has no meta.generation — "
+            "legacy manifest, rollback protection inactive. Re-seal with "
+            "scripts/seal_souls.py to enable it."
+        )
+
     if violations:
         reason = "Soul integrity violation(s) detected:\n" + "\n".join(violations)
         logger.critical(f"[SOUL_GUARD] {reason}")

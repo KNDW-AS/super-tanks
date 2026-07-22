@@ -366,3 +366,47 @@ class TestNotifyLevelChangeSafety:
         # Must not raise.
         trust_score._notify_level_change("aeris", "standard", "probation",
                                          0.0, "tripwire_access")
+
+
+# ── HMAC-chained trust_events (STA-01 Threat 06) ───────────────────────────
+
+class TestTrustEventChain:
+    def test_clean_chain_verifies(self, trust_db):
+        trust_db.record_event("aeris", "successful_task")
+        trust_db.record_event("aeris", "zef_blocked")
+        trust_db.record_event("zeph", "successful_task")
+        assert trust_db.verify_trust_chain() is None
+
+    def test_hmac_column_populated(self, trust_db):
+        trust_db.record_event("aeris", "successful_task")
+        conn = trust_db._get_conn()
+        try:
+            (h,) = conn.execute(
+                "SELECT hmac FROM trust_events ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert h and len(h) == 64  # sha256 hexdigest
+
+    def test_tampered_event_detected(self, trust_db):
+        trust_db.record_event("aeris", "successful_task")
+        trust_db.record_event("aeris", "successful_task")
+        # Attacker inflates a recorded score_after post-hoc.
+        conn = trust_db._get_conn()
+        try:
+            conn.execute("UPDATE trust_events SET score_after=99.0 WHERE id=1")
+            conn.commit()
+        finally:
+            conn.close()
+        assert trust_db.verify_trust_chain() == 1
+
+    def test_set_score_is_chained_too(self, trust_db):
+        trust_db.set_score("aeris", 42.0, reason="test")
+        assert trust_db.verify_trust_chain() is None
+        conn = trust_db._get_conn()
+        try:
+            conn.execute("UPDATE trust_events SET details='benign' WHERE id=1")
+            conn.commit()
+        finally:
+            conn.close()
+        assert trust_db.verify_trust_chain() == 1

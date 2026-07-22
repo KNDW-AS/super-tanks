@@ -1,7 +1,7 @@
 # Super Tanks — System Card
 
-**Version:** v3.2
-**Last reviewed:** 2026-06-07
+**Version:** v3.3
+**Last reviewed:** 2026-07-22
 **Maintainer:** William (KNDW Shelter Solutions AS)
 
 This document is the deployer-facing description of the assembled
@@ -108,8 +108,16 @@ does not silently bypass the next.
    `is_path_accessible` and `is_tripwire`
    (`core/memory/secure_store.py`, `core/memory/access_control.py`,
    `core/memory/tripwires.py`).
-7. **Append-only audit log** — every memory op recorded WAL-mode
-   SQLite (`core/memory/audit_log.py`).
+7. **Tamper-evident audit evidence** — every memory op, tool
+   dispatch, threat, trust event and approval transition is recorded
+   in WAL-mode SQLite with HMAC-chained rows
+   (`core/security/audit_chain.py`); the chain key is dedicated
+   material separate from the identity key
+   (`core/security/audit_key.py`), so one key compromise cannot both
+   forge identity and rewrite evidence. A `correlation_id` issued per
+   dispatch (`core/security/dispatch_audit.py`) joins the stores for
+   incident reconstruction. The threat monitor verifies all chains
+   (P4–P7) and forces SAFE_MODE on a break.
 8. **GO-Gate human approval** — atomic SQL transitions, single-use
    request IDs, full-256-bit args hash, 5-min TTL
    (`core/ask_admin.py`).
@@ -125,7 +133,10 @@ does not silently bypass the next.
     `core/zeph_quarantine_ast.py`).
 12. **Soul integrity + DIQ frozen contracts** — SHA-256 sealed at
     build time; runtime mismatch → SAFE_MODE / refuses startup
-    (`core/soul_guard.py`, `core/diq/diq_integrity.py`).
+    (`core/soul_guard.py`, `core/diq/diq_integrity.py`). Manifests
+    carry a monotonic `meta.generation` checked against a deployment
+    floor (`core/security/integrity_floor.py`) — restoring an
+    older-but-valid sealed state (backup rollback) fails the check.
 
 Bootstrap sequence in `core/bootstrap.py` runs steps 12 → 1 in fail-
 fast order at process start. The entry point (`main_loop.py`) lives
@@ -162,7 +173,7 @@ outside this open-source release and is responsible for calling
 
 ## Validation
 
-- Test surface: 1,398 pytest tests (collected in CI; `pytest.ini` enforces a
+- Test surface: 1,436 pytest tests (collected in CI; `pytest.ini` enforces a
   70% coverage floor on `core/` and `scripts/`).
 - Concurrency tests for trust_score, audit_log, hierarchical_store,
   approval store atomicity.

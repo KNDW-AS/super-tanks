@@ -128,6 +128,31 @@ class ApprovalStore:
                 ON approval_requests(tool_name, user_id, args_hash, status)
             """)
 
+            # Append-only, HMAC-chained transition log. approval_requests
+            # rows are mutable (status flips pending→approved/denied/
+            # expired), so the table itself can't be chained — instead
+            # every transition lands here as evidence. An attacker with
+            # FS write can still rewrite approval_requests, but the
+            # missing/broken chain in approval_events reveals it
+            # (STA-01 Threat 06).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS approval_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    request_id TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT '',
+                    tool_name TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL DEFAULT '',
+                    args_hash TEXT NOT NULL DEFAULT '',
+                    hmac TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ae_request
+                ON approval_events(request_id)
+            """)
+
     def create_request(
         self,
         tool_name: str,
@@ -206,6 +231,8 @@ class ApprovalStore:
                 request.resolved_at, request.resolved_by,
                 request.raw_params or '{}',
             ))
+            self._log_event(conn, request.request_id, "created",
+                            actor="", request=request)
             conn.commit()
             return True
         except sqlite3.OperationalError as e:
@@ -215,6 +242,37 @@ class ApprovalStore:
             except Exception:
                 logger.debug("Suppressed exception (non-critical path)", exc_info=True)
             return False
+        finally:
+            conn.close()
+
+    def _log_event(self, conn, request_id: str, event: str,
+                   actor: str = "", request: Optional[ApprovalRequest] = None):
+        """Append one chained transition row inside the caller's open
+        transaction. Raises on chain failure — the caller's transaction
+        rolls back, so an approval can never land without its evidence
+        row (fail closed)."""
+        from core.security.audit_chain import append_chained_in_txn
+        append_chained_in_txn(conn, "approval_events", {
+            "timestamp": time.time(),
+            "request_id": request_id,
+            "event": event,
+            "actor": actor,
+            "tool_name": request.tool_name if request else "",
+            "user_id": request.user_id if request else "",
+            "args_hash": request.args_hash if request else "",
+        })
+
+    def verify_event_chain(self) -> Optional[int]:
+        """Return None if the approval_events chain is clean, else the
+        id of the first tampered row. Called by the threat monitor (P7)."""
+        conn = self._get_conn()
+        try:
+            from core.security.audit_chain import verify_chain
+            return verify_chain(
+                conn, "approval_events",
+                ["timestamp", "request_id", "event", "actor",
+                 "tool_name", "user_id", "args_hash"],
+            )
         finally:
             conn.close()
 
@@ -308,13 +366,17 @@ class ApprovalStore:
                 (ApprovalStatus.APPROVED.value, now, admin_id,
                  request_id, ApprovalStatus.PENDING.value, now),
             )
-            conn.commit()
             if cur.rowcount == 0:
+                conn.commit()
                 logger.warning(
                     f"[ASK_ADMIN] Approve failed: request {request_id} "
                     f"not pending or already expired"
                 )
                 return False
+            # Chained evidence row commits atomically with the status
+            # flip — an approval without its event row cannot exist.
+            self._log_event(conn, request_id, "approved", actor=admin_id)
+            conn.commit()
             logger.info(f"[ASK_ADMIN] Approved request {request_id} by {admin_id}")
             return True
         except sqlite3.OperationalError as e:
@@ -342,12 +404,14 @@ class ApprovalStore:
                 (ApprovalStatus.DENIED.value, now, admin_id,
                  request_id, ApprovalStatus.PENDING.value),
             )
-            conn.commit()
             if cur.rowcount == 0:
+                conn.commit()
                 logger.warning(
                     f"[ASK_ADMIN] Deny failed: request {request_id} not pending"
                 )
                 return False
+            self._log_event(conn, request_id, "denied", actor=admin_id)
+            conn.commit()
             logger.info(f"[ASK_ADMIN] Denied request {request_id} by {admin_id}")
             return True
         except sqlite3.OperationalError as e:
@@ -401,6 +465,7 @@ class ApprovalStore:
                     SET status = ?
                     WHERE request_id = ?
                 """, (ApprovalStatus.EXPIRED.value, request_id))
+                self._log_event(conn, request_id, "expired", actor="system")
                 count += 1
                 logger.info(f"[ASK_ADMIN] Expired request {request_id}")
 
@@ -444,6 +509,11 @@ def get_approval_store() -> ApprovalStore:
     if _approval_store is None:
         _approval_store = ApprovalStore()
     return _approval_store
+
+
+def verify_approval_chain() -> Optional[int]:
+    """Module-level entry point for the threat monitor (P7)."""
+    return get_approval_store().verify_event_chain()
 
 
 def check_tool_permission(

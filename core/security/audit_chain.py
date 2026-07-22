@@ -11,9 +11,10 @@ Each row in a chained table carries an `hmac` column whose value is
     HMAC(key, previous_row_hmac || row_canonical_bytes)
 
 where:
-- key       : the runtime HMAC key from core.security.agent_identity
-              (same key the gateway uses for identity tokens — never
-              leaves the process).
+- key       : the dedicated audit-chain HMAC key from
+              core.security.audit_key — deliberately SEPARATE from the
+              identity key so one key compromise cannot both forge
+              agent identity and rewrite evidence (STA-01 Threat 06).
 - prev_hmac : the hmac of the immediately preceding row (empty bytes
               for the first row).
 - row_canonical_bytes : sorted-keys JSON of the row's other fields.
@@ -48,9 +49,12 @@ cleanly. The checkpoint is signed with the same runtime HMAC key, so
 an attacker who lacks the key cannot forge a fresh checkpoint over the
 truncated table.
 
-Two callers today:
+Callers today:
 - core/memory/audit_log.py (memory_access_log)
 - core/security/dispatch_audit.py (dispatch_log)
+- core/security/threat_intel.py (threats)
+- core/security/trust_score.py (trust_events)
+- core/ask_admin.py (approval_events)
 """
 
 import hashlib
@@ -64,9 +68,9 @@ logger = logging.getLogger("super_tanks.audit_chain")
 
 
 def _key() -> bytes:
-    """Resolve the runtime HMAC key. Lazy import avoids a cycle on
-    cold start (agent_identity imports nothing from this module)."""
-    from core.security.agent_identity import _load_key
+    """Resolve the audit-chain HMAC key. Lazy import avoids a cycle on
+    cold start (audit_key imports nothing from this module)."""
+    from core.security.audit_key import _load_key
     return _load_key()
 
 
@@ -88,21 +92,22 @@ def compute_hmac(prev_hmac: Optional[str], row: Dict[str, Any]) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def append_chained(
+def append_chained_in_txn(
     conn: sqlite3.Connection,
     table: str,
     row: Dict[str, Any],
 ) -> str:
-    """Insert one row with a correctly-chained hmac.
+    """Chain-insert one row inside the caller's already-open transaction.
 
-    Caller is responsible for opening the connection and committing.
-    Inside this function we BEGIN IMMEDIATE to serialise the
-    read-prev-then-compute-then-insert sequence; concurrent writers
-    will queue rather than race the chain.
+    For callers like trust_score.record_event that need the chained
+    event row to commit atomically with other writes (score update)
+    in a transaction they own. The caller MUST hold a write
+    transaction (BEGIN IMMEDIATE) so the read-prev-then-insert
+    sequence can't race a concurrent writer, and is responsible for
+    commit/rollback.
 
-    Returns the new row's hmac so the caller can assert / log it.
+    Returns the new row's hmac.
     """
-    conn.execute("BEGIN IMMEDIATE")
     prev = conn.execute(
         f"SELECT hmac FROM {table} ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -117,8 +122,27 @@ def append_chained(
         f"INSERT INTO {table} ({cols}) VALUES ({placeholders})",
         tuple(row_with_chain.values()),
     )
-    conn.commit()
     return row_with_chain["hmac"]
+
+
+def append_chained(
+    conn: sqlite3.Connection,
+    table: str,
+    row: Dict[str, Any],
+) -> str:
+    """Insert one row with a correctly-chained hmac.
+
+    Caller is responsible for opening the connection. Inside this
+    function we BEGIN IMMEDIATE to serialise the
+    read-prev-then-compute-then-insert sequence; concurrent writers
+    will queue rather than race the chain.
+
+    Returns the new row's hmac so the caller can assert / log it.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    h = append_chained_in_txn(conn, table, row)
+    conn.commit()
+    return h
 
 
 def verify_chain(

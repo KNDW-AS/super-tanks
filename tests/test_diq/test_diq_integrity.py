@@ -48,7 +48,14 @@ class TestComputeChecksums:
     def test_write_then_read_roundtrip(self, scratch):
         di.write_checksums()
         data = json.loads((scratch / "DIQ_CHECKSUMS.json").read_text())
-        assert set(data.keys()) == set(di.FROZEN_FILES)
+        assert set(data["files"].keys()) == set(di.FROZEN_FILES)
+        assert data["meta"]["generation"] == 1
+
+    def test_reseal_bumps_generation(self, scratch):
+        di.write_checksums()
+        di.write_checksums()
+        data = json.loads((scratch / "DIQ_CHECKSUMS.json").read_text())
+        assert data["meta"]["generation"] == 2
 
 
 # ── verify_diq_integrity ───────────────────────────────────────────────────
@@ -81,7 +88,32 @@ class TestVerifyDiqIntegrity:
         # Remove one file from the manifest but keep it on disk.
         manifest = json.loads(di._CHECKSUMS_FILE.read_text())
         removed = di.FROZEN_FILES[0]
-        manifest.pop(removed)
+        manifest["files"].pop(removed)
         di._CHECKSUMS_FILE.write_text(json.dumps(manifest))
         with pytest.raises(RuntimeError, match="NOT IN CHECKSUMS"):
             di.verify_diq_integrity()
+
+    def test_legacy_flat_manifest_still_verifies(self, scratch):
+        # Pre-rollback-protection format: flat {name: hash}. Must keep
+        # working (warning only) so existing deployments boot.
+        di._CHECKSUMS_FILE.write_text(json.dumps(di.compute_checksums()))
+        di.verify_diq_integrity()  # no exception
+
+    def test_rollback_to_older_generation_raises(self, scratch):
+        di.write_checksums()   # generation 1
+        di.write_checksums()   # generation 2
+        current = di._CHECKSUMS_FILE.read_text()
+        di.verify_diq_integrity()  # floor is now 2
+
+        # Attacker/backup restores the generation-1 manifest (hashes
+        # still valid for the files on disk).
+        manifest = json.loads(current)
+        manifest["meta"]["generation"] = 1
+        di._CHECKSUMS_FILE.write_text(json.dumps(manifest))
+        with pytest.raises(RuntimeError, match="ROLLBACK"):
+            di.verify_diq_integrity()
+
+    def test_same_generation_verifies_repeatedly(self, scratch):
+        di.write_checksums()
+        di.verify_diq_integrity()
+        di.verify_diq_integrity()  # floor == generation → still clean

@@ -316,3 +316,58 @@ class TestRequestStatus:
         receipt = get_approval_receipt(req.request_id)
         assert receipt is not None
         assert receipt["status"] == "APPROVED"
+
+
+# ── HMAC-chained approval_events (STA-01 Threat 06) ────────────────────────
+
+class TestApprovalEventChain:
+    def test_lifecycle_events_are_chained(self, store):
+        req = store.create_request("shell_exec", "user1", "test", {"cmd": "ls"})
+        store.approve_request(req.request_id, "admin1")
+        assert store.verify_event_chain() is None
+
+        conn = store._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT event, actor FROM approval_events ORDER BY id ASC"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert [r[0] for r in rows] == ["created", "approved"]
+        assert rows[1][1] == "admin1"
+
+    def test_deny_and_expire_logged(self, store):
+        req1 = store.create_request("shell_exec", "user1", "t", {"a": 1})
+        store.deny_request(req1.request_id, "admin1")
+        req2 = store.create_request("file_write", "user1", "t", {"b": 2},
+                                    ttl_seconds=-1)
+        store.expire_old_requests()
+        assert store.verify_event_chain() is None
+
+        conn = store._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT request_id, event FROM approval_events ORDER BY id ASC"
+            ).fetchall()
+        finally:
+            conn.close()
+        events = {(r[0], r[1]) for r in rows}
+        assert (req1.request_id, "denied") in events
+        assert (req2.request_id, "expired") in events
+
+    def test_tampered_approval_event_detected(self, store):
+        req = store.create_request("shell_exec", "user1", "t", {"cmd": "ls"})
+        store.approve_request(req.request_id, "admin1")
+        conn = store._get_conn()
+        try:
+            # Attacker rewrites who approved.
+            conn.execute("UPDATE approval_events SET actor='ghost' WHERE event='approved'")
+            conn.commit()
+        finally:
+            conn.close()
+        assert store.verify_event_chain() == 2
+
+    def test_module_level_verify(self, fresh_singleton):
+        store = fresh_singleton
+        store.create_request("shell_exec", "user1", "t", {"cmd": "ls"})
+        assert ask_admin.verify_approval_chain() is None
