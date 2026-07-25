@@ -121,12 +121,14 @@ def propose(
         "l2_full": l2_full,
     }, ensure_ascii=False)
 
-    # Check existing value for diff
+    # Check existing value for diff — through SecureMemoryStore, because this
+    # is an agent reading a path it named itself. A raw read here let an agent
+    # learn the contents of any path simply by proposing a change to it.
     old_value = None
     try:
-        from core.memory.hierarchical_store import HierarchicalMemoryStore
-        store = HierarchicalMemoryStore()
-        existing = store.read(path, level=2)
+        from core.memory.secure_store import SecureMemoryStore
+        store = SecureMemoryStore()
+        existing = store.read(path, agent_id=agent_id, level=2)
         if existing is not None:
             operation = "update"
             if hasattr(existing, 'l2_full'):
@@ -256,18 +258,31 @@ def approve(branch_id: str, reviewed_by: str = "william") -> Dict[str, Any]:
         path, new_value_json = row[0], row[1]
         new_value = json.loads(new_value_json)
 
-        # Merge into main memory
-        from core.memory.hierarchical_store import HierarchicalMemoryStore
-        store = HierarchicalMemoryStore()
+        # Merge into main memory — through SecureMemoryStore so the write is
+        # tripwire-checked, RBAC-checked and audited. Approval authorises the
+        # merge; it does not exempt it from the memory access model. The actor
+        # is the approver, because that is who authorised this write.
+        from core.memory.secure_store import SecureMemoryStore
+        store = SecureMemoryStore()
         l0 = new_value.get("l0_abstract", "")
         l1 = new_value.get("l1_overview", "")
-        store.store(
+        written = store.store(
             path=path,
+            agent_id=reviewed_by,
             l0_abstract=l0,
             l1_overview=l1,
             l2_full=new_value.get("l2_full", ""),
-            source_agent=reviewed_by,
         )
+        if written is None:
+            # Denied by tripwire or RBAC. The proposal must stay pending —
+            # marking it approved when nothing was written would leave the
+            # record claiming a merge that never happened.
+            conn.rollback()
+            logger.error("[SHADOW] Approval of %s DENIED by memory access "
+                         "control for path %s — proposal left pending",
+                         branch_id, path)
+            return {"success": False,
+                    "error": f"Memory access control denied write to {path}"}
 
         # Generate embedding for hybrid search (L0+L1 only, not L2)
         try:

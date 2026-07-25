@@ -156,6 +156,28 @@ class TestApprove:
         assert m is not None
         assert m.l2_full == {"warm": True}
 
+    def test_denied_write_leaves_proposal_pending(self, shadow, monkeypatch):
+        """R-08: approval authorises a merge, it does not bypass access control.
+
+        The merge now goes through SecureMemoryStore, which returns None when
+        a tripwire or RBAC denies the write. If approve() ignored that, the
+        proposal would be marked 'approved' while nothing was ever written —
+        a record claiming a merge that did not happen.
+        """
+        from core.memory import secure_store
+
+        r = shadow.propose("zeph", "/family/preferences/denied",
+                           "abs", "ov", {"x": 1}, confidence=0.9)
+        monkeypatch.setattr(secure_store.SecureMemoryStore, "store",
+                            lambda self, *a, **kw: None)
+
+        result = shadow.approve(r["branch_id"], reviewed_by="william")
+
+        assert result["success"] is False
+        assert "denied" in result["error"].lower()
+        # Still pending — recoverable once the denial is understood.
+        assert any(p["branch_id"] == r["branch_id"] for p in shadow.get_pending())
+
     def test_unknown_branch_id_fails(self, shadow):
         result = shadow.approve("no-such-id")
         assert result["success"] is False

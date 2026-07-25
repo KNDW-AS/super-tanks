@@ -272,9 +272,14 @@ def hybrid_search(
         if is_path_accessible(r["path"], agent_id, mode):
             # Add L0 abstract if not already present
             if "l0_abstract" not in r:
-                from core.memory.hierarchical_store import HierarchicalMemoryStore
-                store = HierarchicalMemoryStore()
-                l0 = store.read(r["path"], level=0)
+                # Through SecureMemoryStore: the RBAC check above already
+                # decided this path is allowed, but a raw read leaves no audit
+                # entry — every hybrid-search read was invisible in the log.
+                # Re-checking costs little; a second, separate implementation
+                # of "who may read this" is what would eventually drift.
+                from core.memory.secure_store import SecureMemoryStore
+                store = SecureMemoryStore()
+                l0 = store.read(r["path"], agent_id=agent_id, level=0, mode=mode)
                 r["l0_abstract"] = l0 if isinstance(l0, str) else ""
             accessible.append(r)
         if len(accessible) >= top_k:
