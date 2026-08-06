@@ -33,7 +33,7 @@ For convenience, the controls referenced below:
 | 3 | DIQ Layer | `core/diq/` (`diq_integrity.py`, `diq_tools.py`, `diq_registry.py`, `diq_a2a.py`, …) |
 | 4 | Allowlists | `core/security/tool_allowlists.py` |
 | 5 | GO-Gate | `core/go_gate_approval_daemon.py` (Telegram approval, `request_id`) |
-| 6 | Sandbox | `core/zeph_quarantine_ast.py`, `core/zeph_quarantine.py`; Docker (`Dockerfile`, `docker-compose.yml`) |
+| 6 | Sandbox | `core/zeph_quarantine_ast.py`, `core/zeph_quarantine.py` (static AST screening before approval). `Dockerfile` / `docker-compose.yml` provide *deployment* isolation for the application as a whole — they do not contain approved agent code at runtime. See Layer 6 honesty note below |
 | 7 | Circuit Breaker | `core/security/trust_score.py`, `core/security/super_tanks_mode.py` (LOCKDOWN / Night) |
 | 8 | Tool Zone Isolation | tool-zone partitioning enforced via gateway dispatch + allowlists |
 | 9 | MCP Security Manager | trust-level enforcement for MCP servers (described as Layer 9; no dedicated `mcp_*` module is present in this OSS snapshot — see caveat below) |
@@ -50,6 +50,16 @@ For convenience, the controls referenced below:
 > MCP trust handling is realised through DIQ frozen contracts (`core/diq/`),
 > allowlists, and tool-zone isolation rather than a single named file. Treat
 > Layer 9's *code* coverage as partial.
+
+> **Layer 6 honesty note.** "Sandbox" means *static* screening: the AST scanner
+> (`core/zeph_quarantine_ast.py`) inspects agent-generated code before it can be
+> approved, and rejects dynamic execution, banned imports and obfuscation tricks.
+> It is preventative, not a containment boundary — approved code then executes
+> in-process with the application's own privileges, and the dependency-upgrade
+> path (`core/security/dep_upgrade_apply.py`) invokes `pip` on the host by
+> design. The `Dockerfile` isolates the *deployment*, not the agent. A runtime
+> sandbox (bubblewrap/seccomp/nsjail) around both paths is tracked as **R-04**,
+> the highest-priority open item in [RISK_REGISTER.md](RISK_REGISTER.md).
 
 ---
 
@@ -166,7 +176,7 @@ are in development as of 2026.
 | Human oversight of consequential actions | GO-Gate (5) human-in-the-loop, single-use `request_id`, time-bounded approval via Telegram | Strong |
 | Indirect / tool-mediated prompt injection | ZEF Firewall (1) + tool-output re-scan and provenance tagging (`gateway._scan_response_for_injection`) | Strong |
 | Inter-agent (A2A) communication integrity | A2A signature verify `core/a2a/escalation_rules.py` (`verify_or_drop`) → `agent_identity.verify_a2a_message`; unsigned/tampered messages dropped | Strong |
-| Containment of untrusted execution | Sandbox (6) Docker isolation + AST scanner `core/zeph_quarantine_ast.py` | Strong |
+| Containment of untrusted execution | Sandbox (6) AST scanner `core/zeph_quarantine_ast.py` screens agent-generated code before approval; once approved, code runs in-process with the application's privileges | **Partial** — AST is preventative-only. A runtime sandbox wrapping approved code *and* the pip upgrade path is the top open item (R-04, [RISK_REGISTER.md](RISK_REGISTER.md)) |
 | Cascading-failure / runaway containment | Circuit Breaker (7) `core/security/trust_score.py`; LOCKDOWN / Night mode `core/security/super_tanks_mode.py` | Strong |
 | Memory / context poisoning resistance | Soul Files (2); memory tripwires `core/memory/tripwires.py`; secure store `core/memory/secure_store.py`; DIQ (3) | Moderate |
 | Tamper-evident agent action logging | Hash-chained audit `core/security/audit_chain.py` (per-row HMAC + checkpoint sidecar); dispatch audit with `correlation_id` `core/security/dispatch_audit.py` | Strong |
