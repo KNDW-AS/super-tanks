@@ -54,12 +54,15 @@ dev = [
 ]
 all = ["super-tanks[telegram,llm,smarthome,web,voice]"]
 
+[project.scripts]
+supertanks = "supertanks.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/kndw-as/super-tanks"
 Issues = "https://github.com/kndw-as/super-tanks/issues"
 
 [tool.setuptools.packages.find]
-include = ["core*", "scripts*"]
+include = ["core*", "scripts*", "supertanks*"]
 
 [tool.ruff]
 target-version = "py310"

@@ -18,3 +18,7 @@ memory/
 vendor/
 config/voice_rooms.json
 config/zef_baseline.json
+
+# generated at install time (python -m supertanks seal); never commit
+core/diq/DIQ_CHECKSUMS.json
+core/soul_integrity.json

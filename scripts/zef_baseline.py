@@ -120,6 +120,8 @@ def _report(tier: str, m: dict, baselined: bool, all_pass: bool,
 
 
 def main(argv=None) -> int:
+    import logging as _logging
+    _logging.getLogger("zef.injection_filter").setLevel(_logging.ERROR)
     parser = argparse.ArgumentParser(
         prog="zef_baseline",
         description="Measure ZEF redteam corpus and (on pass) mark "
