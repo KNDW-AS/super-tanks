@@ -219,7 +219,7 @@ class TestTelegramAlert:
 
 class TestSoulRollback:
     def _write_manifest(self, env, generation):
-        manifest = json.loads(env.manifest_path.read_text())
+        manifest = json.loads(env.manifest_path.read_text(encoding="utf-8"))
         manifest["meta"] = {"generation": generation,
                            "sealed_at": "2026-07-22T00:00:00+00:00",
                            "git_commit": "abc1234"}

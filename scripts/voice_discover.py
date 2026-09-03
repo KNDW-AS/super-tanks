@@ -72,7 +72,7 @@ def _check_room_config() -> Tuple[bool, str]:
         return False, (f"room map: {ROOM_CONFIG_FILE} missing — "
                        f"run with --scan-ha to generate a starter")
     try:
-        data = json.loads(ROOM_CONFIG_FILE.read_text())
+        data = json.loads(ROOM_CONFIG_FILE.read_text(encoding="utf-8"))
     except Exception as exc:
         return False, f"room map: {ROOM_CONFIG_FILE} corrupt ({exc})"
     rooms = data.get("rooms") or {}

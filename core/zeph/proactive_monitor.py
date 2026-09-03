@@ -101,7 +101,7 @@ def _load_schedule_state() -> Dict[str, str]:
     """Load last_run timestamps from data/monitor_schedule.json."""
     try:
         if SCHEDULE_FILE.exists():
-            return json.loads(SCHEDULE_FILE.read_text())
+            return json.loads(SCHEDULE_FILE.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning("Could not load schedule state: %s", exc)
     return {}
@@ -111,7 +111,7 @@ def _save_schedule_state(state: Dict[str, str]) -> None:
     """Persist last_run timestamps."""
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        SCHEDULE_FILE.write_text(json.dumps(state, indent=2))
+        SCHEDULE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception as exc:
         logger.warning("Could not save schedule state: %s", exc)
 

@@ -83,7 +83,7 @@ def check_soul_integrity() -> Tuple[bool, str]:
         return False, msg
 
     try:
-        with open(INTEGRITY_FILE, "r") as f:
+        with open(INTEGRITY_FILE, "r", encoding="utf-8") as f:
             manifest = json.load(f)
     except Exception as e:
         msg = f"[SOUL_GUARD] Cannot read soul_integrity.json: {e}"

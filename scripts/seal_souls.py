@@ -60,7 +60,7 @@ def main() -> int:
     old_souls = {}
     if MANIFEST.exists():
         try:
-            raw = json.loads(MANIFEST.read_text())
+            raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
             old_souls = raw.get("souls", {})
             old_generation = int(raw.get("meta", {}).get("generation", 0))
         except Exception as exc:
@@ -91,7 +91,7 @@ def main() -> int:
         },
         "souls": souls,
     }
-    MANIFEST.write_text(json.dumps(manifest, indent=2))
+    MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     print(f"Sealed {len(souls)} soul file(s) → {MANIFEST}")
     print(f"  generation: {manifest['meta']['generation']}")
