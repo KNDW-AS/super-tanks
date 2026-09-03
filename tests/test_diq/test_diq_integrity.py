@@ -47,14 +47,14 @@ class TestComputeChecksums:
 
     def test_write_then_read_roundtrip(self, scratch):
         di.write_checksums()
-        data = json.loads((scratch / "DIQ_CHECKSUMS.json").read_text())
+        data = json.loads((scratch / "DIQ_CHECKSUMS.json").read_text(encoding="utf-8"))
         assert set(data["files"].keys()) == set(di.FROZEN_FILES)
         assert data["meta"]["generation"] == 1
 
     def test_reseal_bumps_generation(self, scratch):
         di.write_checksums()
         di.write_checksums()
-        data = json.loads((scratch / "DIQ_CHECKSUMS.json").read_text())
+        data = json.loads((scratch / "DIQ_CHECKSUMS.json").read_text(encoding="utf-8"))
         assert data["meta"]["generation"] == 2
 
 

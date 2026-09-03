@@ -327,5 +327,5 @@ class TestRunReview:
         report = mod.run_review(days=7)
         saved = Path(report["saved_to"])
         assert saved.exists()
-        data = json.loads(saved.read_text())
+        data = json.loads(saved.read_text(encoding="utf-8"))
         assert data["period_days"] == 7
