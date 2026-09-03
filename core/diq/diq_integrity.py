@@ -78,7 +78,7 @@ def write_checksums() -> None:
     old_generation = 0
     if _CHECKSUMS_FILE.exists():
         try:
-            _, old_meta = _parse_manifest(json.loads(_CHECKSUMS_FILE.read_text()))
+            _, old_meta = _parse_manifest(json.loads(_CHECKSUMS_FILE.read_text(encoding="utf-8")))
             old_generation = int(old_meta.get("generation", 0))
         except Exception:
             logger.warning("Existing DIQ_CHECKSUMS.json unreadable — generation restarts at 1")
@@ -91,7 +91,7 @@ def write_checksums() -> None:
         },
         "files": compute_checksums(),
     }
-    _CHECKSUMS_FILE.write_text(json.dumps(manifest, indent=2))
+    _CHECKSUMS_FILE.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     logger.info("DIQ checksums written to %s (generation %d)",
                 _CHECKSUMS_FILE, manifest["meta"]["generation"])
     for name, digest in manifest["files"].items():
@@ -116,7 +116,7 @@ def verify_diq_integrity() -> None:
             "validated the frozen contract files)."
         )
 
-    expected, meta = _parse_manifest(json.loads(_CHECKSUMS_FILE.read_text()))
+    expected, meta = _parse_manifest(json.loads(_CHECKSUMS_FILE.read_text(encoding="utf-8")))
     failures = []
 
     # Anti-rollback (STA-01 Threat 05): a manifest that matches its

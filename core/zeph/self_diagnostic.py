@@ -257,7 +257,7 @@ def identify_competence_gaps() -> Dict[str, Any]:
         if settings_path.exists():
             try:
                 import yaml
-                settings = yaml.safe_load(settings_path.read_text())
+                settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
                 tools_section = settings.get("tools", {})
                 if isinstance(tools_section, dict):
                     registered_tools = list(tools_section.keys())
@@ -448,7 +448,7 @@ def run_monthly_diagnostic() -> Dict[str, Any]:
         diag_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         report_path = diag_dir / f"diagnostic_{timestamp}.txt"
-        report_path.write_text(report_text)
+        report_path.write_text(report_text, encoding="utf-8")
         logger.info("Diagnostic report saved to %s", report_path)
     except Exception as exc:
         logger.warning("Could not save diagnostic report: %s", exc)

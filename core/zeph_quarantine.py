@@ -359,7 +359,7 @@ class QuarantineWatcher(FileSystemEventHandler):
         }
         if scan_result.violations:
             report_data["violations"] = scan_result.violations
-        with open(report_path, 'w') as f:
+        with open(report_path, 'w', encoding='utf-8') as f:
             json.dump(report_data, f, indent=2)
 
         # Update proposal status

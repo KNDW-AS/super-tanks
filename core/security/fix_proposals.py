@@ -97,7 +97,7 @@ _PIN_RE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*==\s*([A-Za-z0-9_.+\-]+)")
 def _read_requirements() -> List[str]:
     if not REQUIREMENTS_FILE.exists():
         return []
-    return REQUIREMENTS_FILE.read_text().splitlines(keepends=True)
+    return REQUIREMENTS_FILE.read_text(encoding="utf-8").splitlines(keepends=True)
 
 
 def find_pinned_version(package: str) -> Optional[str]:
@@ -152,7 +152,7 @@ def save(proposal: FixProposal) -> Path:
     _ensure_dir()
     path = _path_for(proposal.id)
     path.write_text(json.dumps(proposal.to_dict(), indent=2,
-                               ensure_ascii=False))
+                               ensure_ascii=False), encoding="utf-8")
     return path
 
 
@@ -161,7 +161,7 @@ def load(proposal_id: str) -> Optional[FixProposal]:
     if not path.exists():
         return None
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return FixProposal(**data)
     except Exception as exc:
         logger.error("[FIX] failed to load proposal %s: %s",
@@ -175,7 +175,7 @@ def list_all() -> List[FixProposal]:
     out: List[FixProposal] = []
     for path in sorted(PROPOSALS_DIR.glob("*.json")):
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             out.append(FixProposal(**data))
         except Exception as exc:
             logger.warning("[FIX] skipping malformed %s: %s", path.name, exc)
@@ -287,5 +287,5 @@ def write_requirements_with_pin(package: str, target_version: str) -> str:
         else:
             new_lines.append(line)
     new_text = "".join(new_lines)
-    REQUIREMENTS_FILE.write_text(new_text)
+    REQUIREMENTS_FILE.write_text(new_text, encoding="utf-8")
     return new_text

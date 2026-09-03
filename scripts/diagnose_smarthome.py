@@ -197,7 +197,7 @@ def check_mode() -> dict:
         return result
 
     try:
-        state = json.loads(state_file.read_text())
+        state = json.loads(state_file.read_text(encoding="utf-8"))
     except Exception as e:
         _line(FAIL, "state file", f"unreadable: {e}")
         return result
@@ -478,7 +478,7 @@ def check_soul() -> dict:
         return result
 
     try:
-        manifest = json.loads(INTEGRITY_FILE.read_text())
+        manifest = json.loads(INTEGRITY_FILE.read_text(encoding="utf-8"))
     except Exception as e:
         _line(FAIL, "manifest", f"unreadable: {e}")
         return result

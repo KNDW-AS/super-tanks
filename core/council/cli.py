@@ -132,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.file:
-        question = Path(args.file).read_text()
+        question = Path(args.file).read_text(encoding="utf-8")
     elif args.question:
         question = args.question
     else:

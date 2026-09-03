@@ -55,7 +55,7 @@ def _load_room_config() -> Dict[str, Room]:
     if not ROOM_CONFIG_FILE.exists():
         return {}
     try:
-        data = json.loads(ROOM_CONFIG_FILE.read_text())
+        data = json.loads(ROOM_CONFIG_FILE.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.error("[ROOM_ROUTER] failed to parse %s: %s",
                      ROOM_CONFIG_FILE, exc)

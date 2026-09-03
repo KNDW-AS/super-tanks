@@ -141,7 +141,7 @@ def _persist_zef_baseline(fingerprint: str) -> None:
     }
     try:
         ZEF_BASELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        ZEF_BASELINE_FILE.write_text(json.dumps(payload, indent=2))
+        ZEF_BASELINE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     except Exception as e:
         logger.error("Failed to persist ZEF baseline: %s", e)
 
@@ -152,7 +152,7 @@ def load_zef_baseline() -> Optional[str]:
     if not ZEF_BASELINE_FILE.exists():
         return None
     try:
-        data = json.loads(ZEF_BASELINE_FILE.read_text())
+        data = json.loads(ZEF_BASELINE_FILE.read_text(encoding="utf-8"))
         fp = data.get("fingerprint")
         if fp:
             with _state_lock:
@@ -309,7 +309,7 @@ def _persist_state(old_mode=None, new_mode=None):
     }
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps(state, indent=2))
+        STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception as e:
         logger.error("Failed to persist state: %s", e)
 
@@ -466,7 +466,7 @@ def load_mode_from_state():
     global _current_mode, _autonomous_started_at, _autonomous_timeout_at, _timeout_hours
     if STATE_FILE.exists():
         try:
-            state = json.loads(STATE_FILE.read_text())
+            state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
             _current_mode = TankMode(state.get("mode", "lockdown"))
 
             if _current_mode == TankMode.AUTONOMOUS:

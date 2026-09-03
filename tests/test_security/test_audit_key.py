@@ -1,3 +1,4 @@
+import os
 """
 Tests for core/security/audit_key.py — the dedicated audit-chain key.
 
@@ -27,6 +28,7 @@ class TestKeyAcquisition:
         # Env-sourced key never touches the filesystem.
         assert not fresh_audit_key._KEY_FILE_PATH.exists()
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes do not apply on Windows")
     def test_generates_and_persists_key_file(self, fresh_audit_key):
         key = fresh_audit_key._load_key()
         assert len(key) == 32

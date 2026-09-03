@@ -45,7 +45,7 @@ def verify_frozen() -> bool:
         return False
 
     try:
-        manifest = json.loads(CHECKSUMS_FILE.read_text())
+        manifest = json.loads(CHECKSUMS_FILE.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         print(f"🔴 ERROR: DIQ_CHECKSUMS.json is corrupt: {exc}")
         return False

@@ -40,7 +40,7 @@ FLOOR_FILE: Path = _FLOOR_FILE_DEFAULT
 def _read_floors() -> dict:
     try:
         if FLOOR_FILE.exists():
-            return json.loads(FLOOR_FILE.read_text())
+            return json.loads(FLOOR_FILE.read_text(encoding="utf-8"))
     except Exception as exc:
         # Unreadable floor state is loud but non-fatal: failing closed
         # here would brick startup on a corrupt json, and an attacker
@@ -54,7 +54,7 @@ def _write_floors(floors: dict) -> None:
     try:
         FLOOR_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = FLOOR_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(floors, indent=2))
+        tmp.write_text(json.dumps(floors, indent=2), encoding="utf-8")
         os.replace(tmp, FLOOR_FILE)
         try:
             os.chmod(FLOOR_FILE, 0o600)
