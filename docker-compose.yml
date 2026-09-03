@@ -3,7 +3,6 @@ version: "3.8"
 services:
   super-tanks:
     build: .
-    image: kndw/super-tanks:latest
     container_name: super-tanks
     ports:
       - "8765:8765"

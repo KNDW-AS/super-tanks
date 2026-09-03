@@ -17,6 +17,23 @@ echo -e "${BLUE}║   Your AI home. Works offline.        ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
 echo ""
 
+# ── Step 0: Is the packaged product actually here? ──
+if [ ! -f "main_loop.py" ]; then
+    echo ""
+    echo "  This clone contains the governance layers, the tests and the red-team corpus,"
+    echo "  but NOT the agent main loop (main_loop.py) or the dashboard API. Those are part"
+    echo "  of the maintainer's private deployment, so the Docker stack cannot start an agent."
+    echo ""
+    echo "  Use the developer install instead (no Docker, any laptop):"
+    echo "    python3 -m venv .venv && source .venv/bin/activate"
+    echo "    pip install -e \".[dev]\""
+    echo "    python -m supertanks doctor"
+    echo "    python -m supertanks demo"
+    echo "  Details: docs/INSTALL_DEV.md"
+    echo ""
+    exit 1
+fi
+
 # ── Step 1: Check OS ──
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -36,6 +53,8 @@ else
     if [[ "$OS" == "Linux" ]]; then
         curl -fsSL https://get.docker.com | sh
         sudo usermod -aG docker "$USER"
+        echo -e "${YELLOW}  Docker group added. Log out and back in (or run: newgrp docker), then rerun ./install.sh${NC}"
+        exit 0
         echo -e "${YELLOW}  NOTE: You may need to log out and back in for Docker permissions.${NC}"
     elif [[ "$OS" == "Darwin" ]]; then
         echo -e "${YELLOW}  Please install Docker Desktop from https://docker.com/products/docker-desktop${NC}"
@@ -118,12 +137,18 @@ done
 
 # Wait for health check
 echo "  Waiting for system to be ready..."
+READY=0
 for i in $(seq 1 60); do
     if curl -sf "http://localhost:$PORT/api/health" &>/dev/null; then
-        break
+        READY=1; break
     fi
     sleep 2
 done
+if [ "$READY" != "1" ]; then
+    echo -e "${RED}  FAIL: nothing answered on http://localhost:$PORT/api/health after 120 s.${NC}"
+    echo "  Look at: docker compose logs"
+    exit 1
+fi
 
 # ── Step 7: Open browser ──
 echo -e "${GREEN}[7/7]${NC} Opening setup wizard..."

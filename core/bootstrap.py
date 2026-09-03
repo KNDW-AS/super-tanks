@@ -223,3 +223,14 @@ def is_booted() -> bool:
 def get_boot_result() -> Optional[BootResult]:
     """Last BootResult or None if boot() has not been called."""
     return _boot_result
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys as _sys
+    try:
+        _r = boot()
+    except RuntimeError as _e:
+        print(f"[!!] {_e}")
+        _sys.exit(1)
+    for _k, _v in vars(_r).items():
+        print(f"  {_k:14} {_v}")

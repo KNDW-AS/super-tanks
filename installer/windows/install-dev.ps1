@@ -33,22 +33,24 @@ Ok "winget found"
 # 2. Git
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   Say "Installing Git..."
-  winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements | Out-Null
+  winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { Warn "winget could not install Git. Install it from https://git-scm.com and rerun."; exit 1 }
   $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
 }
 Ok ("Git: " + (git --version))
 
 # 3. Python 3.12
 $py = $null
-foreach ($cand in @("py -3.12","python3.12","python")) {
+foreach ($cand in @("py -3.12","py -3.11","py -3.10","python3.12","python")) {
   try {
     $v = & cmd /c "$cand -c ""import sys;print(sys.version_info[:2])""" 2>$null
-    if ($v -match "\(3, (1[0-9])\)") { $py = $cand; break }
+    if ($v -match "\(3, (10|11|12)\)") { $py = $cand; break }
   } catch {}
 }
 if (-not $py) {
   Say "Installing Python 3.12..."
-  winget install --id Python.Python.3.12 -e --accept-package-agreements --accept-source-agreements | Out-Null
+  winget install --id Python.Python.3.12 -e --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { Warn "winget could not install Python 3.12. Install it from https://python.org (tick 'Add to PATH') and rerun."; exit 1 }
   $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
   $py = "py -3.12"
 }
@@ -74,13 +76,16 @@ $venvPy = Join-Path $target ".venv\Scripts\python.exe"
 & $venvPy -m pip install --upgrade pip --quiet
 Say "Installing super-tanks with dev extras (this takes a few minutes the first time)"
 & $venvPy -m pip install -e ".[dev]" --quiet
+if ($LASTEXITCODE -ne 0) { Warn "pip install failed — see output above. Usually: wrong Python version (need 3.10–3.12) or no internet."; exit 1 }
 Ok "Package installed"
+Say "Environment check"
+& $venvPy -m supertanks doctor
 
 # 6. Tests
 if (-not $SkipTests) {
   Say "Running unit tests (expect ~1,300 passed)"
   & $venvPy -m pytest -q --no-cov -p no:cacheprovider
-  if ($LASTEXITCODE -ne 0) { Warn "Some tests failed — see output above. Installation itself is complete." }
+  if ($LASTEXITCODE -ne 0) { Warn "Some tests FAILED. Do not continue on a red suite: copy the output above and send it to William (billyxp@gmail.com)." }
   else { Ok "All tests passed" }
   Say "ZEF red-team baseline (report only)"
   & $venvPy -m scripts.zef_baseline --tier local-dev --report-only
@@ -102,7 +107,9 @@ Write-Host ""
 Write-Host "  Done. Next steps:" -ForegroundColor White
 Write-Host "    cd $target"
 Write-Host "    .\.venv\Scripts\Activate.ps1"
-Write-Host "    python -m pytest -q --no-cov              # tests"
+Write-Host "    python -m supertanks doctor              # environment check"
+Write-Host "    python -m supertanks demo                # GO-Gate demo"
+Write-Host "    python -m supertanks test                # tests"
 Write-Host "    python -m scripts.zef_baseline --tier local-dev --report-only"
 Write-Host "    code .                                   # read core\security, tests\security\redteam"
 Write-Host ""

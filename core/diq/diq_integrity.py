@@ -112,8 +112,8 @@ def verify_diq_integrity() -> None:
         # diq_integrity.write_checksums() explicitly to seal.
         raise RuntimeError(
             "DIQ_CHECKSUMS.json not found — refusing to start. "
-            "Run diq_integrity.write_checksums() once after validating "
-            "the frozen contract files."
+            "Run: python -m supertanks seal  (writes the manifest after you have "
+            "validated the frozen contract files)."
         )
 
     expected, meta = _parse_manifest(json.loads(_CHECKSUMS_FILE.read_text()))

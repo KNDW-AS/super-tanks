@@ -47,6 +47,7 @@ textarea{min-height:80px;resize:vertical}
 </style>
 </head>
 <body>
+<div style="background:#fff4e5;border-bottom:2px solid #b45309;padding:10px 16px;font:14px sans-serif;color:#1a1d23"><b>Demo UI.</b> Saving needs the dashboard API, which is not part of the open-source repository. The checkmarks on the last step are illustrative, not measured. To verify your install run <code>python -m supertanks doctor</code>.</div>
 <div class="wizard" id="wizard">
 
 <!-- STEP 0: Language -->
@@ -286,7 +287,7 @@ async function applyConfig(){
                     curfew_time:u.curfew||null,emergency_override:u.override,
                     content_filter:u.filter,admin_pin:'0000'})});
         }
-    }catch(e){console.error('Setup error:',e)}
+    }catch(e){alert('Could not reach the backend (/api). This demo UI needs the private dashboard API. Run: python -m supertanks doctor');console.error('Setup error:',e)}
 }
 
 // Init
