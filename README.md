@@ -122,6 +122,14 @@ Beyond OWASP, MITRE ATLAS, and the EU AI Act above, Super Tanks publishes two mo
 
 ## Install
 
+> **Developers and researchers:** you do not need Docker. See
+> [docs/INSTALL_DEV.md](docs/INSTALL_DEV.md) — one script for Windows 11
+> (`installer/windows/install-dev.bat`) or macOS (`installer/macos/install-dev.sh`)
+> sets up Python, runs the 1,440 tests and the ZEF red-team corpus.
+> The Docker path below is for the packaged product and expects the agent main
+> loop, which is not part of this repository.
+
+
 Super Tanks is a server-side framework (Docker + Python + Ollama). It installs on
 a machine you control — a Linux server or desktop is the primary target.
 
