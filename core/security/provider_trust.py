@@ -109,7 +109,9 @@ def _parse_scalar(raw: str):
     raw = raw.strip()
     if raw == "" or raw in ("null", "~"):
         return None
-    if raw.startswith("[") and raw.endswith("]"):
+    if raw.startswith("[") or raw.startswith("{"):
+        if not (raw.startswith("[") and raw.endswith("]")):
+            raise ValueError(f"unsupported or unterminated inline collection: {raw!r}")
         inner = raw[1:-1].strip()
         return [_parse_scalar(x) for x in inner.split(",")] if inner else []
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
@@ -204,6 +206,9 @@ def load_provider_config(config_path: Optional[str] = None) -> None:
         return
 
     custom = cfg.get("provider_tiers") or {}
+    if not isinstance(custom, dict):
+        logger.warning("[PROVIDER_TRUST] provider_tiers in %s is not a mapping — ignored", path)
+        custom = {}
     for name, tier in custom.items():
         try:
             tier_int = int(tier)
@@ -216,6 +221,9 @@ def load_provider_config(config_path: Optional[str] = None) -> None:
         _provider_map[str(name).lower()] = tier_int
 
     terms = cfg.get("pii_terms") or []
+    if not isinstance(terms, list):
+        logger.warning("[PROVIDER_TRUST] pii_terms in %s is not a list — ignored", path)
+        terms = []
     _extra_pii = [str(t) for t in terms if str(t).strip()]
     _config_path_loaded = path
     logger.info(

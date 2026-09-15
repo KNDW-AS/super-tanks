@@ -66,6 +66,9 @@ def load_failover_config(config_path: Optional[str] = None) -> None:
         logger.warning("[FAILOVER] could not load %s: %s — using defaults", path, exc)
         return
     chains = cfg.get("fallback_chains") or {}
+    if not isinstance(chains, dict):
+        logger.warning("[FAILOVER] fallback_chains in %s is not a mapping — ignored", path)
+        chains = {}
     for agent, chain in chains.items():
         if isinstance(chain, list):
             _fallback_chains[str(agent)] = [str(p) for p in chain]

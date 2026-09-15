@@ -164,3 +164,17 @@ def test_builtin_parser_rejects_unsupported_yaml():
         pt._load_yaml_subset("just a line without a colon")
     with pytest.raises(ValueError):
         pt._load_yaml_subset("a: 1\n- orphan item")
+    with pytest.raises(ValueError):
+        pt._load_yaml_subset("provider_tiers: [not, a, mapping")
+
+
+def test_wrong_types_in_config_are_ignored(tmp_path, monkeypatch):
+    import sys
+    from core.security import provider_failover as pf
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    cfg = tmp_path / "providers.yaml"
+    cfg.write_text("provider_tiers: just-a-string\npii_terms: also-a-string\nfallback_chains: nope\n", encoding="utf-8")
+    pt.load_provider_config(str(cfg))
+    pf.load_failover_config(str(cfg))
+    assert pt.get_tier("anthropic") == pt.TIER_2_TRUSTED and pt._extra_pii == []
+    assert pf.get_fallback_chain("x") == []
