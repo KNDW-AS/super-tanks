@@ -1,5 +1,17 @@
 # Unreleased (v3.3) — evidence-integrity hardening
 
+- **Layers 11 and 12 — Provider Trust Tier + Provider Failover GO-Gate**
+  (`core/security/provider_trust.py`, `core/security/provider_failover.py`,
+  `config/providers.yaml`): every LLM provider is classified LOCAL / TRUSTED /
+  MIXED / OPEN (unknown → OPEN, fail-closed); prompts and system prompts are
+  stripped for the target tier before they leave the process (secrets at
+  tier 2, + PII and configured `pii_terms` at tier 3, + paths and device ids
+  at tier 4); every provider call is audited with metadata only. Moving an
+  agent to a less-trusted provider requires a GO-Gate approval through the
+  shared `ApprovalStore`; denied or timed-out approvals queue the message —
+  no silent downgrade. Wired into the Council (`Voice.fallback`,
+  `Council.ask(max_tier=…)`). 35 new tests.
+
 Hardening pass driven by the published 7ASecurity STA-01 threat model
 (Threats 05 and 06). 1,436 tests green.
 
