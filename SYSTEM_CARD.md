@@ -1,7 +1,7 @@
 # Super Tanks — System Card
 
 **Version:** v3.3
-**Last reviewed:** 2026-07-22
+**Last reviewed:** 2026-09-15
 **Maintainer:** William (KNDW Shelter Solutions AS)
 
 This document is the deployer-facing description of the assembled
@@ -88,7 +88,7 @@ gates as user input. Cloud-provider tokens live in env vars; raw
 prompts are scrubbed by `core/security/audit_sanitizer.py` before
 being committed to the audit log.
 
-## Security architecture (12 layers)
+## Security architecture (14 checks in dispatch order)
 
 In dispatch order. Each layer is independent — failure of any layer
 does not silently bypass the next.
@@ -137,6 +137,20 @@ does not silently bypass the next.
     carry a monotonic `meta.generation` checked against a deployment
     floor (`core/security/integrity_floor.py`) — restoring an
     older-but-valid sealed state (backup rollback) fails the check.
+13. **Provider trust tier** — every LLM provider is classified LOCAL /
+    TRUSTED / MIXED / OPEN (`config/providers.yaml`, unknown → OPEN);
+    prompt and system prompt are stripped for the target tier before
+    the call and every call is audited with metadata only
+    (`core/security/provider_trust.py`, `core/council/council.py`).
+14. **Provider failover GO-Gate** — switching an agent to a lower trust
+    tier, or asking a lower-tier voice a question marked `max_tier`,
+    requires an approval in the shared `ApprovalStore`; denied or
+    timed-out approvals queue the message
+    (`core/security/provider_failover.py`).
+
+The README's "12 security layers" is the product view (one entry per
+defensive mechanism); the 14 checks above are the same controls listed
+in the order they run on a dispatch, with identity and audit split out.
 
 Bootstrap sequence in `core/bootstrap.py` runs steps 12 → 1 in fail-
 fast order at process start. The entry point (`main_loop.py`) lives

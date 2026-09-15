@@ -1,0 +1,38 @@
+# Super Tanks — Layer 11 (Provider Trust Tier) and Layer 12 (Provider Failover GO-Gate)
+#
+# Tiers: 1 = LOCAL (nothing stripped) · 2 = TRUSTED (paid cloud, DPA; secrets stripped)
+#        3 = MIXED (free tier / may train on data; + PII stripped) · 4 = OPEN (+ paths, device ids)
+# Unknown providers are tier 4 (fail-closed). Keys are the vendor tags used by council Voices.
+
+provider_tiers:
+  # TIER 1 — local inference
+  ollama: 1
+  llama.cpp: 1
+  lm_studio: 1
+
+  # TIER 2 — paid cloud with a data-processing agreement
+  anthropic: 2
+  openai: 2
+  gemini-paid: 2
+
+  # TIER 3 — free tiers (data may be used for training)
+  google: 3
+  gemini: 3
+  groq: 3
+
+  # TIER 4 — open / unknown routing or jurisdiction
+  openrouter: 4
+  deepseek: 4
+
+# Names, addresses or identifiers that must never reach a tier 3/4 provider.
+# Empty by default — add your own.
+pii_terms: []
+
+# Layer 12: ordered fallback chains per agent. Moving to a LOWER tier than the
+# current provider requires a GO-Gate approval; a denied or timed-out approval
+# queues the message instead of sending it. Same or higher tier is automatic.
+fallback_chains:
+  default: ["anthropic", "google", "ollama"]
+
+# Seconds to wait for a GO-Gate decision on a tier downgrade before queuing.
+downgrade_approval_timeout_s: 300

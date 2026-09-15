@@ -11,14 +11,14 @@
 
 **The governance layer that makes AI autonomy possible.**
 
-Not a detection tool that reacts after something goes wrong. 10 simultaneous security layers that prevent it from happening in the first place.
+Not a detection tool that reacts after something goes wrong. 12 simultaneous security layers that prevent it from happening in the first place.
 
 <p align="center">
   <img src="docs/assets/go-gate-demo.gif" width="700" alt="GO-Gate demo: an agent's tool call is paused fail-closed, a human approves one call and denies another">
 </p>
 <p align="center"><sub>GO-Gate in action — reproduce it yourself: <code>python3 scripts/demo_go_gate.py</code></sub></p>
 
-> **What is in this repository:** the governance layers (`core/`), 1,440 tests and the ZEF red-team corpus.
+> **What is in this repository:** the governance layers (`core/`), 1,479 tests and the ZEF red-team corpus.
 > **What is not:** the agent main loop (`main_loop.py`), the dashboard API on port 8765 and the private tool adapters.
 > The Docker image and the setup wizard need those, so `./install.sh` and `docker compose` will **not** start an agent from a clone.
 > Everything below runs on any laptop with Python 3.10+, no Docker, no GPU.
@@ -30,21 +30,21 @@ python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\
 pip install -e ".[dev]"
 python -m supertanks doctor      # checks the environment, prints exact fixes
 python -m supertanks demo        # GO-Gate in 10 seconds, no network
-python -m supertanks test        # 1,440 tests, ~80 s, offline
+python -m supertanks test        # 1,479 tests, ~80 s, offline
 ```
 One-click scripts: `installer/windows/install-dev.bat` (Windows 11) · `bash installer/macos/install-dev.sh` (macOS). Details: [docs/INSTALL_DEV.md](docs/INSTALL_DEV.md).
 
 ## What is Super Tanks?
 
-Super Tanks is a compliance-by-design security and governance architecture for autonomous AI agents. It controls what AI agents can and cannot do at the architectural level — every action is mediated through 10 enforcement layers before it reaches a tool, a model, or the outside world.
+Super Tanks is a compliance-by-design security and governance architecture for autonomous AI agents. It controls what AI agents can and cannot do at the architectural level — every action is mediated through 12 enforcement layers before it reaches a tool, a model, or the outside world.
 
-- **10 security layers** running simultaneously
+- **12 security layers** running simultaneously
 - **5-level user access** — explicit access control per principal
 - **Works offline** — local AI via Ollama, no cloud required
 - **Auditable** — every decision logged, every soul SHA256-sealed
 - **Open source** — Apache 2.0
 
-## The 10 Security Layers
+## The 12 Security Layers
 
 | # | Layer | What it does |
 |---|-------|-------------|
@@ -58,6 +58,8 @@ Super Tanks is a compliance-by-design security and governance architecture for a
 | 8 | **Tool Zone Isolation** | 49 tools partitioned into 7 zones |
 | 9 | **MCP Security Manager** | Trust-level enforcement for MCP servers |
 | 10 | **allowed_agents** | Skill-level isolation per agent (added 2026-05-25) |
+| 11 | **Provider Trust Tier** | Every LLM provider classified LOCAL / TRUSTED / MIXED / OPEN; secrets, PII and internal identifiers stripped before a prompt leaves the process; unknown providers fail closed; every call audited (added 2026-09-15) |
+| 12 | **Provider Failover GO-Gate** | No silent downgrade: switching an agent to a less-trusted provider needs a human GO; denied or timed-out approvals queue the message instead (added 2026-09-15) |
 
 ## OWASP Top 10 for Agentic Applications (ASI 2026)
 
@@ -72,7 +74,7 @@ Super Tanks is built against the [OWASP Top 10 for Agentic Applications 2026](ht
 | **ASI05** | Unexpected Code Execution (RCE) — natural-language paths trigger arbitrary execution | Sandbox (6), GO-Gate (5), ZEF Firewall (1), DIQ Layer (3), Tool Zone Isolation (8) |
 | **ASI06** | Memory & Context Poisoning — long-lasting behavior changes via poisoned memory | Soul Files (2), RBAC + tripwires in memory module, DIQ Layer (3) |
 | **ASI07** | Insecure Inter-Agent Communication — spoofed messages misdirect agent clusters | A2A whitelist + escalation rules, Allowlists (4), Soul Files (2) |
-| **ASI08** | Cascading Failures — multi-step failures spread across workflows | Circuit Breaker (7), GO-Gate (5), LOCKDOWN mode, full audit log |
+| **ASI08** | Cascading Failures — multi-step failures spread across workflows | Circuit Breaker (7), GO-Gate (5), Provider Failover GO-Gate (12), LOCKDOWN mode, full audit log |
 | **ASI09** | Human-Agent Trust Exploitation — attackers exploit human-agent trust | GO-Gate (5) with Telegram approvals, audit log, content filter |
 | **ASI10** | Rogue Agents — agents act beyond intended scope | Soul Files (2), Allowlists (4), allowed_agents (10), Zeph proactive monitoring, Dual Mode |
 
@@ -84,10 +86,10 @@ Beyond OWASP, Super Tanks maps to the [MITRE ATLAS](https://atlas.mitre.org/) ad
 |---|---|---|
 | **AML.T0051** — LLM Prompt Injection (Direct & Indirect) | Crafted input subverts the model's instructions; indirect payloads ride in via retrieved/tool content | ZEF Firewall (1); tool-output re-scan + `untrusted_content` provenance tagging (`gateway._scan_response_for_injection`); DIQ (3); GO-Gate (5) |
 | **AML.T0054** — LLM Jailbreak | Prompt forces the model past its guardrails | ZEF Firewall (1), Soul Files (2), LOCKDOWN / Night mode, Trust score |
-| **AML.T0057** — LLM Data Leakage | Crafted queries pull out secrets or training data | Allowlists (4), Tool Zone Isolation (8), `secret_probe` filters, audit sanitiser |
+| **AML.T0057** — LLM Data Leakage | Crafted queries pull out secrets or training data | Provider Trust Tier (11), Allowlists (4), Tool Zone Isolation (8), `secret_probe` filters, audit sanitiser |
 | **AML.T0053** — LLM Plugin Compromise | A poisoned tool/plugin is induced into unsafe action | MCP Security Manager (9), DIQ frozen contracts (3), Tool Zone Isolation (8) |
 | **AML.T0010** — ML Supply Chain Compromise | Poisoned model, registry, or dependency | MCP Security Manager (9), DIQ frozen contracts (3), Sandbox (6) |
-| **AML.T0024 / T0025** — Exfiltration via inference API / cyber means | Data smuggled out through the agent's own channels | `data_exfil` egress filters, Allowlists (4), append-only audit log |
+| **AML.T0024 / T0025** — Exfiltration via inference API / cyber means | Data smuggled out through the agent's own channels | Provider Trust Tier (11) + Failover GO-Gate (12), `data_exfil` egress filters, Allowlists (4), append-only audit log |
 | **AML.T0012** — Valid Accounts | Stolen or forged agent identity used to act | HMAC identity tokens (`core/security/agent_identity.py`), Allowlists (4), Trust score |
 
 *ATLAS is a living framework; technique IDs are given per the current matrix at [atlas.mitre.org](https://atlas.mitre.org/) and should be verified there before formal audit use.*
@@ -126,7 +128,7 @@ This is compliance-by-design, not compliance-by-audit: the controls exist before
 
 Beyond OWASP, MITRE ATLAS, and the EU AI Act above, Super Tanks publishes two more standards mappings:
 
-- **[Agent Control Specification (ACS)](docs/ACS_MAPPING.md)** — how the 10 layers cover the ACS five runtime checkpoints (input, LLM, state, tool execution, output).
+- **[Agent Control Specification (ACS)](docs/ACS_MAPPING.md)** — how the 12 layers cover the ACS five runtime checkpoints (input, LLM, state, tool execution, output).
 - **[NIST AI governance](docs/COMPLIANCE_NIST.md)** — AI RMF (GOVERN/MAP/MEASURE/MANAGE), AI 600-1 GenAI Profile, and the emerging IR 8596 Cyber AI Profile / COSAiS agentic overlays.
 
 ## Install
@@ -134,7 +136,7 @@ Beyond OWASP, MITRE ATLAS, and the EU AI Act above, Super Tanks publishes two mo
 > **Developers and researchers:** you do not need Docker. See
 > [docs/INSTALL_DEV.md](docs/INSTALL_DEV.md) — one script for Windows 11
 > (`installer/windows/install-dev.bat`) or macOS (`installer/macos/install-dev.sh`)
-> sets up Python, runs the 1,440 tests and the ZEF red-team corpus.
+> sets up Python, runs the 1,479 tests and the ZEF red-team corpus.
 > The Docker path below is for the packaged product and expects the agent main
 > loop, which is not part of this repository.
 

@@ -1,6 +1,6 @@
 # Super Tanks — NIST AI Governance Mapping
 
-This document maps Super Tanks' 10 security layers and supporting modules to the
+This document maps Super Tanks' 12 security layers and supporting modules to the
 NIST AI governance corpus, complementing the OWASP Agentic Top 10, MITRE ATLAS,
 and EU AI Act mappings published in the [README](../README.md).
 
@@ -22,7 +22,7 @@ The frameworks covered here are:
 
 ---
 
-## The 10 layers and key modules (reference)
+## The 12 layers and key modules (reference)
 
 For convenience, the controls referenced below:
 
@@ -38,6 +38,8 @@ For convenience, the controls referenced below:
 | 8 | Tool Zone Isolation | tool-zone partitioning enforced via gateway dispatch + allowlists |
 | 9 | MCP Security Manager | trust-level enforcement for MCP servers (described as Layer 9; no dedicated `mcp_*` module is present in this OSS snapshot — see caveat below) |
 | 10 | allowed_agents | skill-level isolation per agent (enforced in `core/diq/diq_skills.py` + allowlists) |
+| 11 | Provider Trust Tier | `core/security/provider_trust.py` (tier map + strip rules, `config/providers.yaml`), audited per call in `core/council/council.py` |
+| 12 | Provider Failover GO-Gate | `core/security/provider_failover.py` (downgrade → `ApprovalStore` request, fail-closed) |
 | — | HMAC agent identity | `core/security/agent_identity.py` |
 | — | Tamper-evident audit | `core/security/audit_chain.py` (hash-chained, HMAC per row + checkpoint sidecar) |
 | — | Dispatch audit | `core/security/dispatch_audit.py` (`correlation_id`) |

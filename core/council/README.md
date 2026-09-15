@@ -21,6 +21,21 @@ The Council runs on whatever voices have credentials available.
 | Qwen-2.5-72B | OpenRouter | qwen-2.5-72b-instruct:free | ✅ free tier | `OPENROUTER_API_KEY` |
 | Claude-Opus-4.7 | Anthropic | claude-opus-4-7 | 💰 pay tier | `ANTHROPIC_API_KEY` |
 
+## Trust tiers (Layer 11/12)
+
+Each vendor tag maps to a trust tier in `config/providers.yaml` (LOCAL / TRUSTED /
+MIXED / OPEN; unknown vendors are OPEN). Before a voice is asked, the question and
+system prompt are stripped for that voice's tier — secrets never reach a cloud
+voice, PII never reaches a free-tier voice — and the call is audited (metadata
+only; plug a ledger with `council.set_audit_sink`). Free tiers default to MIXED;
+move a vendor to TRUSTED in your config if you pay for a plan with a
+data-processing agreement.
+
+A sensitive question can carry `max_tier`: voices below that tier are only asked
+after a GO-Gate approval (`Council.ask(question, max_tier=2)`). A `Voice.fallback`
+is used when a voice fails, but a fallback to a *lower* tier goes through the same
+gate — no silent downgrade.
+
 ## Usage
 
 ```bash
