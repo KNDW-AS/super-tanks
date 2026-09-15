@@ -123,3 +123,44 @@ def test_jwt_and_google_keys_stripped_at_tier2():
 
 def test_none_passthrough():
     assert pt.strip_context_for_tier(None, pt.TIER_4_OPEN) is None
+
+
+# ── config loading without PyYAML (CI installs no yaml package) ─────────────
+
+def test_builtin_parser_matches_pyyaml_on_shipped_config():
+    yaml = pytest.importorskip("yaml")
+    import pathlib
+    text = pathlib.Path(pt._default_config_path()).read_text(encoding="utf-8")
+    assert pt._load_yaml_subset(text) == yaml.safe_load(text)
+
+
+def test_config_loads_without_pyyaml(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "yaml", None)   # makes `import yaml` raise ImportError
+    cfg = tmp_path / "providers.yaml"
+    cfg.write_text(textwrap.dedent("""
+        # comment line
+        provider_tiers:
+          google: 2        # trailing comment
+          my-endpoint: 1
+        pii_terms:
+          - "Jane Doe"
+          - Example Street 1
+        fallback_chains:
+          default: ["anthropic", "google", "ollama"]
+        downgrade_approval_timeout_s: 7
+    """), encoding="utf-8")
+    pt.load_provider_config(str(cfg))
+    assert pt.get_tier("google") == pt.TIER_2_TRUSTED
+    assert pt.get_tier("my-endpoint") == pt.TIER_1_LOCAL
+    assert pt._extra_pii == ["Jane Doe", "Example Street 1"]
+    parsed = pt._load_yaml_subset(cfg.read_text(encoding="utf-8"))
+    assert parsed["fallback_chains"]["default"] == ["anthropic", "google", "ollama"]
+    assert parsed["downgrade_approval_timeout_s"] == 7
+
+
+def test_builtin_parser_rejects_unsupported_yaml():
+    with pytest.raises(ValueError):
+        pt._load_yaml_subset("just a line without a colon")
+    with pytest.raises(ValueError):
+        pt._load_yaml_subset("a: 1\n- orphan item")

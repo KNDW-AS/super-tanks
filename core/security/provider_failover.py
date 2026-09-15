@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from core.security.provider_trust import get_tier, get_tier_name
+from core.security.provider_trust import get_tier, get_tier_name, load_config_file
 
 logger = logging.getLogger("supertanks.provider_failover")
 
@@ -57,9 +57,9 @@ def load_failover_config(config_path: Optional[str] = None) -> None:
     _approval_timeout_s = DEFAULT_APPROVAL_TIMEOUT_S
     path = config_path or _default_config_path()
     try:
-        import yaml  # type: ignore
-        with open(path, encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh) or {}
+        cfg = load_config_file(path)
+        if not isinstance(cfg, dict):
+            raise ValueError("top level is not a mapping")
     except FileNotFoundError:
         return
     except Exception as exc:

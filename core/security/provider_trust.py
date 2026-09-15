@@ -105,6 +105,86 @@ def _default_config_path() -> str:
     return os.path.join(os.path.dirname(__file__), "..", "..", "config", "providers.yaml")
 
 
+def _parse_scalar(raw: str):
+    raw = raw.strip()
+    if raw == "" or raw in ("null", "~"):
+        return None
+    if raw.startswith("[") and raw.endswith("]"):
+        inner = raw[1:-1].strip()
+        return [_parse_scalar(x) for x in inner.split(",")] if inner else []
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        return raw[1:-1]
+    low = raw.lower()
+    if low in ("true", "yes"):
+        return True
+    if low in ("false", "no"):
+        return False
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        return raw
+
+
+def _load_yaml_subset(text: str) -> dict:
+    """Minimal YAML reader for ``providers.yaml``-style files: nested ``key: value``
+    mappings, ``- item`` block lists, inline ``[a, b]`` lists, ``#`` comments. Used
+    when PyYAML is not installed, so the two trust layers never depend on an
+    optional package. Raises ``ValueError`` on anything outside that subset."""
+    root: dict = {}
+    # stack entries: (indent, container, (parent_dict, key) that owns the container)
+    stack: list = [(-1, root, None)]
+    for raw_line in text.splitlines():
+        stripped = raw_line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        line = raw_line.split(" #", 1)[0].rstrip() if " #" in raw_line else raw_line.rstrip()
+        indent = len(line) - len(line.lstrip(" "))
+        content = line.strip()
+        while len(stack) > 1 and indent <= stack[-1][0]:
+            stack.pop()
+        _, container, owner = stack[-1]
+        if content.startswith("- ") or content == "-":
+            if isinstance(container, dict):
+                if container or owner is None:
+                    raise ValueError(f"list item inside a mapping: {raw_line!r}")
+                container = []
+                owner[0][owner[1]] = container          # empty placeholder becomes a list
+                stack[-1] = (stack[-1][0], container, owner)
+            container.append(_parse_scalar(content[1:].strip()))
+            continue
+        if not isinstance(container, dict):
+            raise ValueError(f"mapping key inside a list: {raw_line!r}")
+        if ":" not in content:
+            raise ValueError(f"cannot parse line: {raw_line!r}")
+        key, _, value = content.partition(":")
+        key = key.strip().strip("\"'")
+        value = value.strip()
+        if value == "":
+            child: dict = {}
+            container[key] = child
+            stack.append((indent, child, (container, key)))
+            continue
+        container[key] = _parse_scalar(value)
+    return root
+
+
+def load_config_file(path: str) -> dict:
+    """Read a small YAML config; PyYAML when available, built-in subset parser otherwise."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        yaml = None
+    if yaml is not None:
+        return yaml.safe_load(text) or {}
+    return _load_yaml_subset(text)
+
+
 def load_provider_config(config_path: Optional[str] = None) -> None:
     """Load ``provider_tiers`` and ``pii_terms`` from YAML. Missing file = defaults."""
     global _provider_map, _extra_pii, _config_path_loaded
@@ -112,9 +192,9 @@ def load_provider_config(config_path: Optional[str] = None) -> None:
     _provider_map = dict(DEFAULT_PROVIDER_MAP)
     _extra_pii = []
     try:
-        import yaml  # type: ignore
-        with open(path, encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh) or {}
+        cfg = load_config_file(path)
+        if not isinstance(cfg, dict):
+            raise ValueError("top level is not a mapping")
     except FileNotFoundError:
         _config_path_loaded = None
         return
