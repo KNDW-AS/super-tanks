@@ -16,7 +16,7 @@ AgentDojo block only when `agentdojo` is installed).
 
 ```text
 dispatch_tool(tool_name, params, agent_id, agent_role, identity_token=...)
- │  new correlation_id (ContextVar, joins all audit stores)
+ │  new correlation_id (ContextVar; memory audit rows reuse it)
  ▼
 [1] identity         verify_identity(agent_id, token)           fail → denied_identity
  ▼
@@ -68,7 +68,9 @@ record_dispatch(verdict="allowed", result_success=...) → return ToolResponse
 - Any exception inside [5]–[9] becomes `denied_subsystem` with the
   step name in the error. Any exception anywhere else in the pipeline
   is caught by `dispatch_tool` and also recorded as `denied_subsystem`.
-  No exception escapes `dispatch_tool`.
+  No `Exception` escapes `dispatch_tool`. `BaseException`s that are not
+  `Exception` (`asyncio.CancelledError`, `KeyboardInterrupt`,
+  `SystemExit`) propagate without an audit row.
 - Every denial returns immediately; later steps and the tool do not
   run. `ToolRequest` is frozen and no step modifies it.
 
@@ -79,7 +81,7 @@ and write one row to `dispatch_log` with the verdict below.
 
 | Step | Case | Verdict | `metadata` | Tool executed |
 |---|---|---|---|---|
-| 1 | bad / missing token | `denied_identity` | – | no |
+| 1 | bad / missing token | `denied_identity` (`agent_id=None` is stored as `<none>`) | – | no |
 | 2 | tool not registered | `no_wrapper` (returns `None`) | – | no — caller may fall back |
 | 3 | role too low | `denied_role` | – | no |
 | 3 | `validate_access` raised | `denied_subsystem` | – | no |
@@ -123,7 +125,9 @@ and write one row to `dispatch_log` with the verdict below.
   token can claim `ADMIN` for any tool on its allowlist.
 - **Exempt callers.** `system` and `internal` skip only the allowlist
   [4]; they still need a valid token and pass every other step. No other
-  id is exempt (`test` was exempt before v3.3.0).
+  id is exempt (`test` was exempt before v3.3.0). The circuit breaker is
+  keyed by `agent_id`, so every in-process caller that dispatches as
+  `system` shares one budget (and `internal` another).
 - **It does not resume paused calls.** After a human approves, the
   caller must re-issue the identical call (same tool, agent and
   arguments). The approval covers that call for 1 hour; a human deny
@@ -199,7 +203,9 @@ and comms tools … up to 5 for an unmapped tool; see the zone table),
 then a 300 s lockout that survives restarts. It is checked before
 GO-Gate (a locked-out agent cannot even open approval requests) and
 recorded only when a call is about to execute (paused and denied calls
-cost nothing). A benchmark run will trip the default; raise it:
+cost nothing). The budget is per `agent_id`: all callers using the same
+id — for example every in-process component dispatching as `system` —
+share it. A benchmark run will trip the default; raise it:
 
 ```python
 from core.security import circuit_breaker as cb

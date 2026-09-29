@@ -2,12 +2,12 @@
   <img src="docs/assets/logo.svg" width="140" alt="Super Tanks logo">
 </p>
 
-# Super Tanks v3.2
+# Super Tanks v3.3
 
 [![CI](https://github.com/kndw-as/super-tanks/actions/workflows/tests.yml/badge.svg)](https://github.com/kndw-as/super-tanks/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![OWASP Agentic Top 10 (2026)](https://img.shields.io/badge/OWASP-Agentic_Top_10_2026-1f6feb.svg)](#owasp-top-10-for-agentic-applications-asi-2026)
-[![Tests](https://img.shields.io/badge/tests-1440_passing-success.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1578_passing-success.svg)](#)
 
 **The governance layer that makes AI autonomy possible.**
 
@@ -18,7 +18,7 @@ Not a detection tool that reacts after something goes wrong. 12 simultaneous sec
 </p>
 <p align="center"><sub>GO-Gate in action — reproduce it yourself: <code>python3 scripts/demo_go_gate.py</code></sub></p>
 
-> **What is in this repository:** the governance layers (`core/`), 1,576 tests and the ZEF red-team corpus.
+> **What is in this repository:** the governance layers (`core/`), the test suite (1,579 tests at v3.3.0) and the ZEF red-team corpus.
 > **What is not:** the agent main loop (`main_loop.py`), the dashboard API on port 8765 and the private tool adapters.
 > The Docker image and the setup wizard need those, so `./install.sh` and `docker compose` will **not** start an agent from a clone.
 > Everything below runs on any laptop with Python 3.10+, no Docker, no GPU.
@@ -30,7 +30,7 @@ python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\
 pip install -e ".[dev]"
 python -m supertanks doctor      # checks the environment, prints exact fixes
 python -m supertanks demo        # GO-Gate in 10 seconds, no network
-python -m supertanks test        # 1,576 tests, ~80 s, offline
+python -m supertanks test        # full test suite, offline; 1–2 min on a laptop
 ```
 One-click scripts: `installer/windows/install-dev.bat` (Windows 11) · `bash installer/macos/install-dev.sh` (macOS). Details: [docs/INSTALL_DEV.md](docs/INSTALL_DEV.md).
 
@@ -138,7 +138,7 @@ Beyond OWASP, MITRE ATLAS, and the EU AI Act above, Super Tanks publishes two mo
 > **Developers and researchers:** you do not need Docker. See
 > [docs/INSTALL_DEV.md](docs/INSTALL_DEV.md) — one script for Windows 11
 > (`installer/windows/install-dev.bat`) or macOS (`installer/macos/install-dev.sh`)
-> sets up Python, runs the 1,576 tests and the ZEF red-team corpus.
+> sets up Python, runs the test suite and the ZEF red-team corpus.
 > The Docker path below is for the packaged product and expects the agent main
 > loop, which is not part of this repository.
 

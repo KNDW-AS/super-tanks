@@ -1,6 +1,6 @@
 # Super Tanks v3.3.0
 
-Three groups of changes since v3.2.0. Test suite: 1,576 tests.
+Three groups of changes since v3.2.0. Test suite: 1,579 tests (1 skipped when agentdojo is not installed).
 
 ## Gateway layers 7–10 now enforce
 
@@ -34,8 +34,11 @@ Previously documented but not present in this repository.
 **Behaviour changes for existing users**
 
 - Tools not in the zone map are `UNCATEGORIZED` and pause for GO-Gate on
-  every call. Map your tools with `tool_zones.set_tool_zone(...)`.
-- These tools now pause for GO-Gate: `home_assistant`, `yale`
+  every call (an approval covers the identical call — same tool, agent and
+  arguments — for 1 h). Map your tools with `tool_zones.set_tool_zone(...)`.
+- These tools now pause for GO-Gate on every call, reads included (the zone
+  action is per tool name; an approval covers the identical call for 1 h):
+  `home_assistant`, `yale`
   (physical actuation); `file_write`, `memory_store`,
   `memory_store_hierarchical`, `memory_tools`, `memory_consolidate`,
   `shadow_store_propose`; `image_generate`; `shell_exec`, `python_exec`,
@@ -44,8 +47,9 @@ Previously documented but not present in this repository.
   Only `system` and `internal` are.
 - A per-agent circuit breaker applies to every agent, including `system`
   and `internal`: 30 weighted units per 60 s (weight 1 for read/task/comms
-  tools … up to 5 for an unmapped tool), 300 s lockout. Benchmarks should
-  raise `CircuitBreaker.DEFAULT_MAX_ACTIONS`.
+  tools … up to 5 for an unmapped tool), 300 s lockout. The budget is per
+  `agent_id`, so all in-process callers dispatching as `system` share one
+  budget. Benchmarks should raise `CircuitBreaker.DEFAULT_MAX_ACTIONS`.
 - The tool-output injection scan fails closed: if the ZEF filter cannot
   run or returns something unexpected, the output is withheld.
 

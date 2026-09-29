@@ -31,7 +31,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 python -m supertanks doctor      # environment check, prints exact fixes
 python -m supertanks demo        # GO-Gate console demo
-python -m supertanks test        # 1,440 tests
+python -m supertanks test        # full test suite, offline
 python -m scripts.zef_baseline --tier local-dev --report-only
 ```
 

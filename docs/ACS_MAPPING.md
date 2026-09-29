@@ -50,8 +50,10 @@ Tanks adds:
   `previous_row_hmac || row_bytes`, so history cannot be rewritten without the (mode-0600,
   never-serialised) key; `verify_chain` detects the first tampered row
   (`core/security/audit_chain.py`).
-- **Correlation-tracked dispatch audit** — every tool dispatch gets a `correlation_id` propagated
-  via a ContextVar for end-to-end traceability (`core/security/dispatch_audit.py`).
+- **Correlation-tracked dispatch audit** — every tool dispatch gets a `correlation_id`, published
+  via a ContextVar for the dispatch; memory-access rows written during the call carry the same id
+  (`core/security/dispatch_audit.py`, `core/memory/audit_log.py`). Trust events and approval
+  requests do not record it.
 
 ## Honest coverage notes
 

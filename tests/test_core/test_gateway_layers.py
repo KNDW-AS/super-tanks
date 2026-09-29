@@ -403,6 +403,24 @@ class TestExceptionsAreAudited:
         resp = _call("read_tool")
         assert resp.success is False and resp.metadata["output_scan_failed"] is True
 
+    def test_result_whose_str_raises_is_withheld(self, env):
+        class Evil:
+            def __str__(self):
+                raise RuntimeError("no str for you")
+        env["tools"]["read_tool"] = t = _Tool("read_tool", result=Evil())
+        resp = _call("read_tool")
+        assert len(t.calls) == 1
+        assert resp.success is False and resp.metadata["output_scan_failed"] is True
+        rows = env["audit"].get_dispatch_history(agent_id="aeris")
+        assert [r["verdict"] for r in rows] == ["allowed"]
+        assert rows[0]["result_success"] == 0
+
+    def test_none_agent_id_still_audited(self, env):
+        resp = asyncio.run(gateway.dispatch_tool(
+            "read_tool", {}, None, "READ", identity_token="x"))
+        assert resp.success is False
+        assert _verdicts(env["audit"], "<none>") == ["denied_identity"]
+
     def test_unexpected_error_is_caught_and_audited(self, env, monkeypatch):
         def boom(*_a, **_k):
             raise RuntimeError("request build failed")

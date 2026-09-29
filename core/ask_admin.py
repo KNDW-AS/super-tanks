@@ -12,6 +12,7 @@ R5.1 ask_admin: Interactive gatekeeping via Telegram
 """
 
 import os
+import threading
 import uuid
 import hashlib
 import json
@@ -77,6 +78,10 @@ class ApprovalRequest:
         return max(0, remaining)
 
 
+_schema_lock = threading.Lock()
+_schema_ready: set = set()
+
+
 class ApprovalStore:
     """SQLite-backed store for approval requests"""
 
@@ -88,7 +93,15 @@ class ApprovalStore:
             db_path = os.environ.get("SUPER_TANKS_APPROVAL_DB") or str(DEFAULT_DB_PATH)
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        # Schema setup once per DB path per process, serialised: concurrent
+        # first-time `PRAGMA journal_mode=WAL` on a fresh file can fail with
+        # "database is locked" instead of waiting (same pattern as
+        # circuit_breaker / mcp_security).
+        key = str(self.db_path.resolve())
+        with _schema_lock:
+            if key not in _schema_ready:
+                self._init_db()
+                _schema_ready.add(key)
 
     def _get_conn(self):
         """Return a WAL-mode connection with busy timeout. ZEF v1.

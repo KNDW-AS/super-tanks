@@ -18,10 +18,11 @@ Usage (from tool_registry.py handler):
 
 Every dispatch — allowed or denied — is recorded in
 `core.security.dispatch_audit` with a per-call correlation_id. The
-correlation_id is also published via a ContextVar so downstream
-audit/event writers (memory_audit.log_access, trust_score.record_event,
-ApprovalStore) can attach the same ID to their rows. `grep <id>`
-across the four DBs reconstructs the full incident timeline.
+correlation_id is also published via a ContextVar for the duration of
+the dispatch. Today the only other writer that reads it is
+`core.memory.audit_log.log_access`, so memory rows written during a
+tool call carry the same id; trust events and approval requests do not
+(yet) record it.
 
 If no DIQ wrapper exists for the tool, returns None → caller falls
 back to run_fn.
@@ -417,10 +418,12 @@ def _scan_response_for_injection(
     """
     if resp is None or not resp.success or resp.result is None:
         return resp
-    text = _extract_text(resp.result)
-    if not text or len(text) < 8:
-        return resp
     try:
+        # Flattening is inside the try: a result whose __str__ raises is
+        # withheld like any other unscannable output.
+        text = _extract_text(resp.result)
+        if not text or len(text) < 8:
+            return resp
         from core.security.zef_injection_filter import scan_message, FilterVerdict
         verdict = scan_message(text, source=f"tool_output:{tool_name}")
         kind, patterns = verdict.verdict, list(verdict.matched_patterns)

@@ -399,3 +399,22 @@ class TestGateToolCall:
         store.deny_request(req.request_id, "admin")
         assert store.find_denied_request("t", "u", {"a": 1}).request_id == req.request_id
         assert store.find_denied_request("t", "u", {"a": 1}, max_age_seconds=-1) is None
+
+
+def test_concurrent_first_use_on_fresh_db(tmp_path):
+    import threading
+    path = str(tmp_path / "fresh_approvals.db")
+    errors = []
+
+    def worker(i):
+        try:
+            ApprovalStore(db_path=path).create_request("t", f"u{i}", "r", {"i": i})
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(ApprovalStore(db_path=path).list_pending(limit=100)) == 40

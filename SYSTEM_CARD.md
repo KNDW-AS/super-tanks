@@ -39,8 +39,9 @@ commercialised.
 ### What the agents can do
 
 - **Aeris (READ/CHAT, level 2):** smart-home reads + writes
-  (`home_assistant`; each write-capable call pauses for GO-Gate, layer
-  8), task list, memory hierarchy reads, weather, web
+  (`home_assistant`; the zone action applies per tool name, so every
+  `home_assistant` and `yale` call pauses for GO-Gate, reads included —
+  layer 8), task list, memory hierarchy reads, weather, web
   search/browse, file reads under allowed roots, calculator, agent-to-agent
   messaging, push notifications.
 - **Zeph (EXEC, level 4):** everything Aeris can do plus shell and
@@ -159,7 +160,8 @@ quarantine and the agent loop (the loop is not in this repository).
    (`core/security/circuit_breaker.py`). Checked twice: a pre-check
    before GO-Gate that records nothing (a locked-out agent cannot open
    approval requests), and check-and-record as the last step before
-   execute (only executed calls consume budget). L7.
+   execute (only executed calls consume budget). Keyed by `agent_id`:
+   all in-process callers dispatching as `system` share one budget. L7.
 6. **Tool zone + GO-Gate** — the tool's zone decides allow / GO-Gate /
    deny; unknown tools require GO-Gate. GO-Gate returns
    `pending_approval` with the approval request id; the call is not
@@ -282,8 +284,10 @@ outside this open-source release and is responsible for calling
 
 ## Validation
 
-- Test surface: 1,576 pytest tests (collected in CI; `pytest.ini` enforces a
-  70% coverage floor on `core/` and `scripts/`).
+- Test surface: 1,579 pytest tests. The 70% coverage floor on `core/`
+  and `scripts/` is enforced by the `pytest` job in
+  `.github/workflows/tests.yml` (`--cov-fail-under=70`), not by
+  `pytest.ini`; the cross-platform `quickstart` jobs run with `--no-cov`.
 - Concurrency tests for trust_score, audit_log, hierarchical_store,
   approval store atomicity.
 - Fail-closed tests for every defense layer (gateway, soul guard,

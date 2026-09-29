@@ -4,6 +4,8 @@ Each block runs in its own subprocess from the repo root. A short
 prelude (not part of the doc) only redirects the SQLite stores and keys
 to a temp dir so the test never writes to data/. Blocks whose first line
 is `# requires: <module>` are skipped when that module is missing.
+When a block is followed by an "Output" text block, stdout must match it
+(UUIDs masked).
 """
 
 import importlib.util
@@ -31,9 +33,29 @@ PRELUDE = textwrap.dedent("""
 """)
 
 
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
 def _blocks():
+    """[(code, expected_output_or_None)] for every ```python block.
+
+    The expected output is the first ```text block after the code block
+    (and before the next ```python block) that is introduced by a line
+    starting with "Output".
+    """
     text = DOC.read_text(encoding="utf-8")
-    return re.findall(r"```python\n(.*?)```", text, flags=re.S)
+    out = []
+    for m in re.finditer(r"```python\n(.*?)```", text, flags=re.S):
+        tail = text[m.end():]
+        nxt = tail.find("```python")
+        tail = tail if nxt < 0 else tail[:nxt]
+        exp = re.search(r"^Output[^\n]*\n\n```text\n(.*?)```", tail, flags=re.S | re.M)
+        out.append((m.group(1), exp.group(1) if exp else None))
+    return out
+
+
+def _normalise(s):
+    return [_UUID.sub("<UUID>", line.rstrip()) for line in s.strip().splitlines()]
 
 
 BLOCKS = _blocks()
@@ -41,12 +63,13 @@ BLOCKS = _blocks()
 
 def test_doc_has_python_blocks():
     assert len(BLOCKS) >= 4
+    assert sum(1 for _, exp in BLOCKS if exp) >= 3
 
 
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("index", range(len(BLOCKS)))
 def test_block_runs(index, tmp_path):
-    code = BLOCKS[index]
+    code, expected = BLOCKS[index]
     first = code.lstrip().splitlines()[0]
     m = re.match(r"#\s*requires:\s*(\w+)", first)
     if m and importlib.util.find_spec(m.group(1)) is None:
@@ -59,3 +82,5 @@ def test_block_runs(index, tmp_path):
                                "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
                           timeout=110)
     assert proc.returncode == 0, proc.stderr[-2000:]
+    if expected is not None:
+        assert _normalise(proc.stdout) == _normalise(expected), proc.stdout
