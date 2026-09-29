@@ -137,8 +137,15 @@ def record_dispatch(
       "denied_identity"   — HMAC token verification failed
       "denied_role"       — DIQ role check failed
       "denied_allowlist"  — per-agent allowlist rejected the call
-      "denied_subsystem"  — allowlist or another subsystem raised;
+      "denied_agent"      — tool's allowed_agents() excludes the agent (L10)
+      "denied_zone"       — zone policy DENY, or a human denied the
+                            GO-Gate request for this exact call (L8)
+      "pending_approval"  — paused in GO-Gate; not executed (L8/L9)
+      "denied_mcp"        — MCP server quarantined/unknown/denied (L9)
+      "denied_circuit_breaker" — agent over its rate budget (L7)
+      "denied_subsystem"  — a check raised or its store is unavailable;
                             fail-closed deny
+      "no_wrapper"        — tool not registered; caller falls back
     """
     now = datetime.now(timezone.utc).isoformat()
     row = {

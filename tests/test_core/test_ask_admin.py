@@ -371,3 +371,31 @@ class TestApprovalEventChain:
         store = fresh_singleton
         store.create_request("shell_exec", "user1", "t", {"cmd": "ls"})
         assert ask_admin.verify_approval_chain() is None
+
+
+# ── Gateway entry point: gate_tool_call ───────────────────────────────────
+
+class TestGateToolCall:
+    def test_pending_then_approved(self, fresh_singleton):
+        outcome, req_id, _ = ask_admin.gate_tool_call("file_write", "zeph", {"p": 1}, "why")
+        assert outcome == "pending" and req_id
+        fresh_singleton.approve_request(req_id, "admin")
+        assert ask_admin.gate_tool_call("file_write", "zeph", {"p": 1}, "why")[:2] == (
+            "approved", req_id)
+
+    def test_denied_stays_denied(self, fresh_singleton):
+        _, req_id, _ = ask_admin.gate_tool_call("file_write", "zeph", {}, "why")
+        fresh_singleton.deny_request(req_id, "admin")
+        assert ask_admin.gate_tool_call("file_write", "zeph", {}, "why")[0] == "denied"
+        # A different agent or different args is a different call.
+        assert ask_admin.gate_tool_call("file_write", "aeris", {}, "why")[0] == "pending"
+
+    def test_store_failure_is_unavailable(self, fresh_singleton, monkeypatch):
+        monkeypatch.setattr(fresh_singleton, "create_request", lambda **k: None)
+        assert ask_admin.gate_tool_call("file_write", "zeph", {}, "why")[0] == "unavailable"
+
+    def test_find_denied_respects_window(self, store):
+        req = store.create_request("t", "u", "r", {"a": 1})
+        store.deny_request(req.request_id, "admin")
+        assert store.find_denied_request("t", "u", {"a": 1}).request_id == req.request_id
+        assert store.find_denied_request("t", "u", {"a": 1}, max_age_seconds=-1) is None

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "super-tanks"
-version = "3.2.0"
+version = "3.3.0"
 description = "Open-source governance layer that makes autonomous AI agents safe in production — enforcement layers mapped to the OWASP Top 10 for Agentic Applications (2026) and the EU AI Act."
 readme = "README.md"
 requires-python = ">=3.10"

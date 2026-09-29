@@ -346,6 +346,33 @@ class ApprovalStore:
                 return self._row_to_request(row)
         return None
 
+    def find_denied_request(
+        self,
+        tool_name: str,
+        user_id: str,
+        args: Dict[str, Any],
+        max_age_seconds: int = 3600,
+    ) -> Optional[ApprovalRequest]:
+        """Most recent human DENY for the same tool/args/user inside the
+        window (mirror of find_approved_request). Used by the gateway so a
+        denied call stays denied instead of re-asking the human."""
+        args_str = json.dumps(args, sort_keys=True)
+        args_hash = hashlib.sha256(args_str.encode()).hexdigest()
+        cutoff_time = time.time() - max_age_seconds
+
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT * FROM approval_requests
+                WHERE tool_name = ? AND user_id = ? AND args_hash = ?
+                AND status = ? AND resolved_at > ?
+                ORDER BY resolved_at DESC LIMIT 1
+            """, (tool_name, user_id, args_hash,
+                  ApprovalStatus.DENIED.value, cutoff_time)).fetchone()
+
+            if row:
+                return self._row_to_request(row)
+        return None
+
     def approve_request(self, request_id: str, admin_id: str) -> bool:
         """Approve a pending request atomically.
 
@@ -566,6 +593,42 @@ def check_tool_permission(
         return False, None, "APPROVAL_STORE_UNAVAILABLE"
 
     return False, request.request_id, "PAUSED_FOR_APPROVAL"
+
+
+def gate_tool_call(
+    tool_name: str,
+    agent_id: str,
+    args: Dict[str, Any],
+    reason: str,
+    ttl_seconds: int = DEFAULT_APPROVAL_TTL_SECONDS,
+) -> Tuple[str, Optional[str], str]:
+    """Gateway entry into GO-Gate for a call that MUST be approved.
+
+    Thin wrapper over check_tool_permission (same store, same dedup,
+    same approval-reuse window) plus one rule: a recent human DENY for
+    the identical call stays a deny instead of opening a new request.
+
+    Returns (outcome, request_id, status_message), outcome one of:
+      "approved"  — an approved request exists; proceed
+      "pending"   — paused; request_id is the approval to resolve
+      "denied"    — a human denied this exact call recently
+      "unavailable" — approval store could not persist (fail closed)
+    Exceptions propagate; the caller must treat them as deny.
+    """
+    store = get_approval_store()
+    denied = store.find_denied_request(tool_name, agent_id, args)
+    if denied is not None:
+        return "denied", denied.request_id, "DENIED_BY_ADMIN"
+    policy = {"tools": {tool_name: {
+        "permission": "ask_admin", "description": reason, "timeout": ttl_seconds,
+    }}}
+    approved, request_id, status = check_tool_permission(
+        tool_name, agent_id, args, policy)
+    if approved:
+        return "approved", request_id, status
+    if request_id is None:
+        return "unavailable", None, status
+    return "pending", request_id, status
 
 
 def get_request_status(request_id: str) -> Optional[Dict[str, Any]]:

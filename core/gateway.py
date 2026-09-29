@@ -25,6 +25,11 @@ across the four DBs reconstructs the full incident timeline.
 
 If no DIQ wrapper exists for the tool, returns None → caller falls
 back to run_fn.
+
+Check order (see docs/RUNTIME_PIPELINE.md): identity → registry lookup
+→ role → allowlist → allowed_agents (L10) → tool zone / GO-Gate (L8)
+→ MCP server trust (L9) → circuit breaker (L7) → execute → output
+injection scan. Every check fails closed.
 """
 
 import logging
@@ -165,7 +170,11 @@ async def _dispatch_inner(
         return resp
 
     # Allowlist enforcement — defense-in-depth.
-    if agent_id not in ("system", "internal", "test"):
+    # The reserved agent ids system/internal/test skip ONLY this check:
+    # they are in-process callers with no entry in AGENT_ALLOWLISTS
+    # (which is keyed by LLM agent). They still need a valid identity
+    # token and still pass role, layers 7-10 and the output scan below.
+    if agent_id not in _ALLOWLIST_EXEMPT:
         try:
             from core.security.tool_allowlists import is_tool_allowed
             if not is_tool_allowed(agent_id, tool_name):
@@ -199,6 +208,25 @@ async def _dispatch_inner(
             )
             return resp
 
+    # Layers 10 → 8 → 9 → 7. Each returns a denial ToolResponse (already
+    # audited) or None to continue. Any exception inside a layer is a
+    # deny (fail closed) — never a free pass.
+    for layer_name, layer in (
+        ("allowed_agents", _check_allowed_agents),
+        ("tool_zone", _check_tool_zone),
+        ("mcp_trust", _check_mcp_trust),
+        ("circuit_breaker", _check_circuit_breaker),
+    ):
+        try:
+            denial = layer(tool, request, corr_id)
+        except Exception as layer_err:
+            logger.error("[gateway] %s check failed for %s/%s: %s corr=%s — DENYING",
+                         layer_name, agent_id, tool_name, layer_err, corr_id)
+            denial = _deny(request, corr_id, "denied_subsystem",
+                           f"{layer_name} unavailable, denying: {layer_err}")
+        if denial is not None:
+            return denial
+
     logger.debug("[gateway] dispatch: agent=%s tool=%s corr=%s",
                  agent_id, tool_name, corr_id)
     # Mark this dispatch as gateway-originated so DIQTool.execute()
@@ -223,6 +251,105 @@ async def _dispatch_inner(
         error=resp.error if resp else None,
     )
     return resp
+
+
+_ALLOWLIST_EXEMPT = ("system", "internal", "test")
+
+
+def _deny(request: ToolRequest, corr_id: str, verdict: str, error: str,
+          metadata: Optional[Dict[str, Any]] = None) -> ToolResponse:
+    """Build a denial, write its audit row, return it."""
+    logger.warning("[gateway] %s: agent=%s tool=%s corr=%s — %s",
+                   verdict.upper(), request.agent_id, request.tool_name, corr_id, error)
+    record_dispatch(
+        correlation_id=corr_id, agent_id=request.agent_id,
+        tool_name=request.tool_name, agent_role=request.agent_role,
+        verdict=verdict, result_success=False, error=error,
+    )
+    return ToolResponse(success=False, result=None, error=error, metadata=metadata)
+
+
+def _go_gate(request: ToolRequest, corr_id: str, reason: str,
+             deny_verdict: str) -> Optional[ToolResponse]:
+    """Route a call through GO-Gate (core.ask_admin). None = approved."""
+    from core.ask_admin import gate_tool_call
+    outcome, req_id, status = gate_tool_call(
+        request.tool_name, request.agent_id, dict(request.parameters), reason)
+    if outcome == "approved":
+        logger.info("[gateway] GO-Gate approved %s for %s (req=%s) corr=%s",
+                    request.tool_name, request.agent_id, req_id, corr_id)
+        return None
+    if outcome == "pending":
+        return _deny(
+            request, corr_id, "pending_approval",
+            f"Paused for human approval ({reason}); request {req_id}",
+            metadata={"approval_request_id": req_id, "go_gate_status": status},
+        )
+    if outcome == "denied":
+        return _deny(request, corr_id, deny_verdict,
+                     f"Denied by human approver (request {req_id})",
+                     metadata={"approval_request_id": req_id})
+    return _deny(request, corr_id, "denied_subsystem",
+                 f"GO-Gate approval store unavailable ({status}), denying")
+
+
+def _check_allowed_agents(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+    """Layer 10 — per-tool agent scope. [] means all agents."""
+    allowed = tool.allowed_agents()
+    if not isinstance(allowed, (list, tuple, set, frozenset)) or not all(
+            isinstance(a, str) for a in allowed):
+        raise TypeError(f"allowed_agents() must return a list of str, got {allowed!r}")
+    if allowed and request.agent_id not in allowed:
+        return _deny(request, corr_id, "denied_agent",
+                     f"Tool '{request.tool_name}' is not available to agent '{request.agent_id}'")
+    return None
+
+
+def _check_tool_zone(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+    """Layer 8 — zone policy: allow / GO-Gate / deny."""
+    from core.security.tool_zones import ZoneAction, get_zone, zone_action
+    zone = get_zone(request.tool_name)
+    action = zone_action(request.tool_name)
+    if action is ZoneAction.ALLOW:
+        return None
+    if action is ZoneAction.DENY:
+        return _deny(request, corr_id, "denied_zone",
+                     f"Tool '{request.tool_name}' is in zone '{zone.value}', which is denied")
+    if action is ZoneAction.GO_GATE:
+        return _go_gate(request, corr_id, f"zone '{zone.value}' requires approval",
+                        "denied_zone")
+    raise ValueError(f"unknown zone action {action!r}")
+
+
+def _check_mcp_trust(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+    """Layer 9 — MCP server trust, only for tools that declare a server."""
+    server = tool.mcp_server()
+    if server is None:
+        return None
+    if not isinstance(server, str) or not server:
+        raise TypeError(f"mcp_server() must return a non-empty str or None, got {server!r}")
+    from core.security.mcp_security import MCPDecision, get_manager
+    manager = get_manager()
+    decision, reason = manager.evaluate(server, request.tool_name)
+    manager.log_invocation(server, request.tool_name, request.agent_id, decision, reason)
+    if decision is MCPDecision.ALLOW:
+        return None
+    if decision is MCPDecision.GO_GATE:
+        return _go_gate(request, corr_id, f"MCP server '{server}': {reason}", "denied_mcp")
+    return _deny(request, corr_id, "denied_mcp", f"MCP server '{server}' blocked: {reason}")
+
+
+def _check_circuit_breaker(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+    """Layer 7 — per-agent weighted rate limit. Records the call."""
+    from core.security.circuit_breaker import CircuitBreakerError, get_breaker
+    from core.security.tool_zones import risk_weight
+    try:
+        get_breaker(request.agent_id).check_and_record(
+            request.tool_name, weight=risk_weight(request.tool_name))
+    except CircuitBreakerError as cb_err:
+        return _deny(request, corr_id, "denied_circuit_breaker", str(cb_err),
+                     metadata={"locked_until": cb_err.locked_until})
+    return None
 
 
 def _extract_text(value) -> str:
@@ -256,9 +383,17 @@ def _scan_response_for_injection(
         return resp
     try:
         from core.security.zef_injection_filter import scan_message, FilterVerdict
-    except Exception:
-        return resp
-    verdict = scan_message(text, source=f"tool_output:{tool_name}")
+        verdict = scan_message(text, source=f"tool_output:{tool_name}")
+    except Exception as scan_err:
+        # Fail closed: output we could not scan is not forwarded.
+        logger.error("[gateway] output scan unavailable for %s: %s corr=%s — withholding",
+                     tool_name, scan_err, corr_id)
+        return ToolResponse(
+            success=False,
+            result=None,
+            error="Tool output could not be scanned for prompt injection and was withheld.",
+            metadata={"output_scan_failed": True},
+        )
     if verdict.verdict is FilterVerdict.BLOCK:
         logger.warning(
             "[gateway] indirect-injection BLOCKED in %s output corr=%s patterns=%s",

@@ -1,4 +1,38 @@
-# Unreleased (v3.3) — evidence-integrity hardening
+# Super Tanks v3.3.0 — layers 7–10 enforced in the gateway, evidence-integrity hardening
+
+- **Layers 7–10 now enforce in `core.gateway.dispatch_tool`** (previously
+  documented but not present in this repository). New order after the
+  allowlist: allowed_agents (10) → tool zone + GO-Gate (8, 5) → MCP server
+  trust (9) → circuit breaker (7) → execute. New modules
+  `core/security/circuit_breaker.py`, `core/security/tool_zones.py`,
+  `core/security/mcp_security.py`; new audit verdicts `denied_agent`,
+  `denied_zone`, `pending_approval`, `denied_mcp`,
+  `denied_circuit_breaker`. All four fail closed (`denied_subsystem`).
+  GO-Gate is now part of the gateway via `core.ask_admin.gate_tool_call`;
+  a paused call returns `pending_approval` with `approval_request_id` in
+  the response metadata. See `docs/RUNTIME_PIPELINE.md`.
+- **`DIQTool` contract v1.2**: optional `allowed_agents()` (default `[]`
+  = all, same rule as `DIQSkill`) and `mcp_server()` (default `None`).
+  Existing tools work unchanged. **Re-seal after upgrading:**
+  `python -m supertanks seal`.
+- **Behaviour changes for existing users:**
+  - Tools not in the zone map are `UNCATEGORIZED` and pause for GO-Gate
+    on every call. Map your tools with `tool_zones.set_tool_zone(...)`.
+  - Tools in `filesystem_rw`, `network_write`, `exec` and `admin`
+    (e.g. `file_write`, `memory_store`, `shell_exec`, `python_exec`,
+    `code_edit`, `memory_delete`, `propose_code_change`, `password`,
+    `image_generate`, `task_add`, `task_done`) now pause for GO-Gate.
+  - A per-agent circuit breaker (30 weighted calls / 60 s, 300 s
+    lockout) applies to every agent, including `system`, `internal` and
+    `test`. Benchmarks should raise `CircuitBreaker.DEFAULT_MAX_ACTIONS`.
+  - The tool-output injection scan now fails closed: if the ZEF filter
+    cannot be imported or raises, the tool output is withheld instead of
+    being forwarded unscanned.
+- Docs: README layer table corrected (layer 6 "Sandbox" is a static AST
+  scan of code proposals, not Docker isolation), SYSTEM_CARD check list
+  mapped to the 12 layers with symbol references instead of stale line
+  numbers, new `docs/RUNTIME_PIPELINE.md`. 1,543 tests.
+
 
 - **Layers 11 and 12 — Provider Trust Tier + Provider Failover GO-Gate**
   (`core/security/provider_trust.py`, `core/security/provider_failover.py`,
@@ -13,7 +47,7 @@
   `Council.ask(max_tier=…)`). 35 new tests.
 
 Hardening pass driven by the published 7ASecurity STA-01 threat model
-(Threats 05 and 06). 1,436 tests green.
+(Threats 05 and 06); 1,436 tests green at the time.
 
 - **Dedicated audit-chain key** (`core/security/audit_key.py`,
   `data/.audit_chain_key` / `SUPER_TANKS_AUDIT_KEY`): chain HMACs no

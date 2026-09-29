@@ -84,6 +84,29 @@ def audit(tmp_path, monkeypatch):
     return dispatch_audit
 
 
+@pytest.fixture(autouse=True)
+def layer_state(tmp_path, monkeypatch):
+    """Isolate layers 7-9 state (breaker DB, MCP DB, GO-Gate store) and
+    give this module's fake tools an explicit ALLOW zone. These tests
+    exercise identity/role/allowlist/output-scan; layers 7-10 have
+    their own tests in tests/test_core/test_gateway_layers.py. Without
+    the zone mapping the unknown names would (correctly) pause in
+    GO-Gate as UNCATEGORIZED."""
+    import core.ask_admin as ask_admin
+    from core.security import circuit_breaker, mcp_security, tool_zones
+    monkeypatch.setattr(circuit_breaker, "DB_PATH", tmp_path / "cb.db")
+    circuit_breaker.reset_breakers()
+    monkeypatch.setattr(mcp_security, "DB_PATH", tmp_path / "mcp.db")
+    monkeypatch.setattr(ask_admin, "_approval_store",
+                        ask_admin.ApprovalStore(db_path=str(tmp_path / "approvals.db")))
+    zones = dict(tool_zones.TOOL_ZONES)
+    for name in ("t", "fake", "any_tool", "allowed_tool", "forbidden_tool"):
+        zones[name] = tool_zones.Zone.FILESYSTEM_RO
+    monkeypatch.setattr(tool_zones, "TOOL_ZONES", zones)
+    yield
+    circuit_breaker.reset_breakers()
+
+
 # ── Identity verification (the gate before everything else) ────────────────
 
 class TestIdentityVerification:
