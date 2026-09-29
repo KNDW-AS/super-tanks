@@ -111,3 +111,39 @@ def test_get_breaker_follows_db_path_and_defaults(db, monkeypatch, tmp_path):
     assert cb.get_breaker("a").max_actions == 7
     monkeypatch.setattr(cb, "DB_PATH", tmp_path / "other.db")
     assert cb.get_breaker("a").db_path == tmp_path / "other.db"
+
+
+def test_check_records_nothing_but_denies_when_locked(db):
+    br = CircuitBreaker("a", max_actions=2, db_path=db)
+    for _ in range(5):
+        br.check("t")
+    assert br.get_status()["load_in_window"] == 0
+    br.check_and_record("t")
+    br.check_and_record("t")
+    with pytest.raises(CircuitBreakerError):
+        br.check("t")                       # over budget → trips lockout
+    assert br.get_status()["is_locked"] is True
+    with pytest.raises(CircuitBreakerError):
+        br.check("t")
+
+
+def test_concurrent_first_use_on_fresh_db(tmp_path):
+    import threading
+    path = tmp_path / "fresh.db"
+    admitted, errors = [], []
+
+    def worker():
+        try:
+            CircuitBreaker("conc", max_actions=10, db_path=path).check_and_record("t")
+            admitted.append(1)
+        except CircuitBreakerError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+    threads = [threading.Thread(target=worker) for _ in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(admitted) == 10

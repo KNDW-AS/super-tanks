@@ -228,7 +228,7 @@ class TestAllowlistEnforcement:
             identity_token=_token(identity, "aeris")))
         assert resp.success is True
 
-    @pytest.mark.parametrize("agent", ["system", "internal", "test"])
+    @pytest.mark.parametrize("agent", ["system", "internal"])
     def test_internal_agents_skip_allowlist_but_still_need_token(
             self, fake_registry, monkeypatch, identity, agent):
         fake_registry["any_tool"] = _Tool(name="any_tool",
@@ -245,6 +245,22 @@ class TestAllowlistEnforcement:
         # Allowlist must not be consulted for internal agents.
         assert calls == []
         assert resp.success is True
+
+    def test_agent_named_test_is_not_exempt(
+            self, fake_registry, monkeypatch, identity):
+        # "test" used to skip the allowlist; with a caller-asserted role
+        # that let any holder of a "test" token call anything. It is now
+        # an ordinary agent id.
+        fake_registry["any_tool"] = _Tool(name="any_tool", required_role="READ")
+        from core.security import tool_allowlists
+        calls = []
+        monkeypatch.setattr(tool_allowlists, "is_tool_allowed",
+                            lambda a, t: calls.append((a, t)) or False)
+        resp = asyncio.run(gateway.dispatch_tool(
+            "any_tool", {}, "test", "ADMIN",
+            identity_token=_token(identity, "test")))
+        assert calls == [("test", "any_tool")]
+        assert resp.success is False and "not in allowlist" in resp.error
 
     @pytest.mark.parametrize("agent", ["system", "internal", "test"])
     def test_internal_agents_still_require_token(

@@ -27,11 +27,13 @@ If no DIQ wrapper exists for the tool, returns None → caller falls
 back to run_fn.
 
 Check order (see docs/RUNTIME_PIPELINE.md): identity → registry lookup
-→ role → allowlist → allowed_agents (L10) → tool zone / GO-Gate (L8)
-→ MCP server trust (L9) → circuit breaker (L7) → execute → output
-injection scan. Every check fails closed.
+→ role → allowlist → allowed_agents (L10) → circuit-breaker pre-check
+(L7) → tool zone / GO-Gate (L8) → MCP server trust (L9) → circuit-breaker
+record (L7) → execute → output injection scan. Every check fails closed;
+agent_role is asserted by the caller, not verified.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -96,6 +98,16 @@ async def dispatch_tool(
             conversation_id=conversation_id,
             corr_id=corr_id,
         )
+    except Exception as err:
+        # Last-resort net: nothing inside the pipeline may escape as an
+        # exception without an audit row.
+        logger.exception("[gateway] unexpected error corr=%s — DENYING", corr_id)
+        error = f"Gateway error, denying: {type(err).__name__}: {err}"
+        await asyncio.to_thread(
+            record_dispatch, correlation_id=corr_id, agent_id=str(agent_id),
+            tool_name=str(tool_name), agent_role=str(agent_role),
+            verdict="denied_subsystem", result_success=False, error=error)
+        return ToolResponse(success=False, result=None, error=error)
     finally:
         current_correlation_id.reset(corr_token)
 
@@ -110,7 +122,20 @@ async def _dispatch_inner(
     conversation_id: Optional[str],
     corr_id: str,
 ) -> Optional[ToolResponse]:
-    """Actual dispatch logic, factored so the correlation_id wrap stays small."""
+    """Actual dispatch logic, factored so the correlation_id wrap stays small.
+
+    SQLite work (audit rows, layer 7-9 state, GO-Gate store) runs in a
+    worker thread via asyncio.to_thread so a contended database cannot
+    block the event loop for the 15 s busy timeout.
+    """
+    async def audit(verdict: str, result_success: Optional[bool], error: Optional[str]) -> None:
+        await asyncio.to_thread(
+            record_dispatch,
+            correlation_id=corr_id, agent_id=agent_id, tool_name=tool_name,
+            agent_role=agent_role, verdict=verdict,
+            result_success=result_success, error=error,
+        )
+
     # Identity verification BEFORE the DIQ lookup so we don't leak the
     # registered tool surface to unauthenticated callers.
     from core.security.agent_identity import verify_identity
@@ -124,11 +149,7 @@ async def _dispatch_inner(
             result=None,
             error="Identity verification failed",
         )
-        record_dispatch(
-            correlation_id=corr_id, agent_id=agent_id, tool_name=tool_name,
-            agent_role=agent_role, verdict="denied_identity",
-            result_success=False, error=resp.error,
-        )
+        await audit("denied_identity", False, resp.error)
         return resp
 
     tool = get_tool(tool_name)
@@ -136,11 +157,7 @@ async def _dispatch_inner(
         # Tool not registered. Not strictly an audit event — the caller
         # falls back to a non-DIQ run_fn. But we record it as an
         # "allowed" no-op so the dispatch history is complete.
-        record_dispatch(
-            correlation_id=corr_id, agent_id=agent_id, tool_name=tool_name,
-            agent_role=agent_role, verdict="no_wrapper",
-            result_success=None, error=None,
-        )
+        await audit("no_wrapper", None, None)
         return None  # No DIQ wrapper — fall back to plugin run_fn
 
     request = ToolRequest(
@@ -151,8 +168,18 @@ async def _dispatch_inner(
         conversation_id=conversation_id,
     )
 
-    # Role enforcement — DIQ contract check
-    if not tool.validate_access(request):
+    # Role enforcement — DIQ contract check. agent_role is asserted by
+    # the caller; it is bound only by the identity token and allowlist.
+    try:
+        role_ok = tool.validate_access(request)
+    except Exception as role_err:
+        logger.error("[gateway] role check raised for %s/%s: %s corr=%s — DENYING",
+                     agent_id, tool_name, role_err, corr_id)
+        resp = ToolResponse(success=False, result=None,
+                            error=f"Role check unavailable, denying: {role_err}")
+        await audit("denied_subsystem", False, resp.error)
+        return resp
+    if not role_ok:
         logger.warning(
             "[gateway] DENIED: agent=%s role=%s tried %s (requires %s) corr=%s",
             agent_id, agent_role, tool_name, tool.required_role(), corr_id,
@@ -162,18 +189,14 @@ async def _dispatch_inner(
             result=None,
             error=f"Access denied: {tool_name} requires role {tool.required_role()}, agent {agent_id} has {agent_role}",
         )
-        record_dispatch(
-            correlation_id=corr_id, agent_id=agent_id, tool_name=tool_name,
-            agent_role=agent_role, verdict="denied_role",
-            result_success=False, error=resp.error,
-        )
+        await audit("denied_role", False, resp.error)
         return resp
 
     # Allowlist enforcement — defense-in-depth.
-    # The reserved agent ids system/internal/test skip ONLY this check:
-    # they are in-process callers with no entry in AGENT_ALLOWLISTS
-    # (which is keyed by LLM agent). They still need a valid identity
-    # token and still pass role, layers 7-10 and the output scan below.
+    # The reserved agent ids system/internal skip ONLY this check: they
+    # are in-process callers with no entry in AGENT_ALLOWLISTS (which is
+    # keyed by LLM agent). They still need a valid identity token and
+    # still pass role, layers 7-10 and the output scan below.
     if agent_id not in _ALLOWLIST_EXEMPT:
         try:
             from core.security.tool_allowlists import is_tool_allowed
@@ -183,12 +206,7 @@ async def _dispatch_inner(
                     result=None,
                     error=f"Tool '{tool_name}' not in allowlist for agent '{agent_id}'",
                 )
-                record_dispatch(
-                    correlation_id=corr_id, agent_id=agent_id,
-                    tool_name=tool_name, agent_role=agent_role,
-                    verdict="denied_allowlist",
-                    result_success=False, error=resp.error,
-                )
+                await audit("denied_allowlist", False, resp.error)
                 return resp
         except Exception as _al_err:
             # Fail closed: an allowlist subsystem failure must not be a
@@ -200,30 +218,30 @@ async def _dispatch_inner(
                 result=None,
                 error=f"Allowlist unavailable, denying: {_al_err}",
             )
-            record_dispatch(
-                correlation_id=corr_id, agent_id=agent_id,
-                tool_name=tool_name, agent_role=agent_role,
-                verdict="denied_subsystem",
-                result_success=False, error=resp.error,
-            )
+            await audit("denied_subsystem", False, resp.error)
             return resp
 
-    # Layers 10 → 8 → 9 → 7. Each returns a denial ToolResponse (already
-    # audited) or None to continue. Any exception inside a layer is a
-    # deny (fail closed) — never a free pass.
+    # Layer 10 → layer 7 pre-check (read-only) → 8 → 9 → layer 7 record.
+    # The breaker pre-check runs before GO-Gate so a locked-out agent
+    # cannot open approval requests; usage is recorded only in the last
+    # step, right before execute, so paused or denied calls cost nothing.
+    # Each step returns a denial ToolResponse (already audited) or None.
+    # Any exception inside a step is a deny (fail closed).
     for layer_name, layer in (
         ("allowed_agents", _check_allowed_agents),
+        ("circuit_breaker", _precheck_circuit_breaker),
         ("tool_zone", _check_tool_zone),
         ("mcp_trust", _check_mcp_trust),
-        ("circuit_breaker", _check_circuit_breaker),
+        ("circuit_breaker", _record_circuit_breaker),
     ):
         try:
-            denial = layer(tool, request, corr_id)
+            denial = await asyncio.to_thread(layer, tool, request, corr_id)
         except Exception as layer_err:
             logger.error("[gateway] %s check failed for %s/%s: %s corr=%s — DENYING",
                          layer_name, agent_id, tool_name, layer_err, corr_id)
-            denial = _deny(request, corr_id, "denied_subsystem",
-                           f"{layer_name} unavailable, denying: {layer_err}")
+            denial = await asyncio.to_thread(
+                _deny, request, corr_id, "denied_subsystem",
+                f"{layer_name} unavailable, denying: {layer_err}")
         if denial is not None:
             return denial
 
@@ -235,8 +253,19 @@ async def _dispatch_inner(
     token = mark_gateway_active()
     try:
         resp = await tool.execute(request)
+    except Exception as exec_err:
+        logger.error("[gateway] tool %s raised: %s corr=%s", tool_name, exec_err, corr_id)
+        resp = ToolResponse(success=False, result=None,
+                            error=f"Tool raised {type(exec_err).__name__}: {exec_err}")
+        await audit("tool_error", False, resp.error)
+        return resp
     finally:
         reset_gateway_active(token)
+    if not isinstance(resp, ToolResponse):
+        resp = ToolResponse(success=False, result=None,
+                            error=f"Tool returned {type(resp).__name__}, not ToolResponse")
+        await audit("tool_error", False, resp.error)
+        return resp
 
     # R-02: indirect prompt-injection scan on tool output. Web/file/
     # memory content can carry attacker instructions that ride back
@@ -244,16 +273,11 @@ async def _dispatch_inner(
     # content that scans as a high-confidence injection.
     resp = _scan_response_for_injection(resp, tool_name, corr_id)
 
-    record_dispatch(
-        correlation_id=corr_id, agent_id=agent_id, tool_name=tool_name,
-        agent_role=agent_role, verdict="allowed",
-        result_success=resp.success if resp else None,
-        error=resp.error if resp else None,
-    )
+    await audit("allowed", resp.success, resp.error)
     return resp
 
 
-_ALLOWLIST_EXEMPT = ("system", "internal", "test")
+_ALLOWLIST_EXEMPT = ("system", "internal")
 
 
 def _deny(request: ToolRequest, corr_id: str, verdict: str, error: str,
@@ -339,8 +363,23 @@ def _check_mcp_trust(tool, request: ToolRequest, corr_id: str) -> Optional[ToolR
     return _deny(request, corr_id, "denied_mcp", f"MCP server '{server}' blocked: {reason}")
 
 
-def _check_circuit_breaker(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
-    """Layer 7 — per-agent weighted rate limit. Records the call."""
+def _precheck_circuit_breaker(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+    """Layer 7 pre-check (before GO-Gate): deny if the agent is locked
+    out or this call would exceed its budget. Records no usage."""
+    from core.security.circuit_breaker import CircuitBreakerError, get_breaker
+    from core.security.tool_zones import risk_weight
+    try:
+        get_breaker(request.agent_id).check(
+            request.tool_name, weight=risk_weight(request.tool_name))
+    except CircuitBreakerError as cb_err:
+        return _deny(request, corr_id, "denied_circuit_breaker", str(cb_err),
+                     metadata={"locked_until": cb_err.locked_until})
+    return None
+
+
+def _record_circuit_breaker(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+    """Layer 7, last step before execute: atomic check-and-record. Trips
+    the lockout if this call would exceed the budget."""
     from core.security.circuit_breaker import CircuitBreakerError, get_breaker
     from core.security.tool_zones import risk_weight
     try:
@@ -384,6 +423,9 @@ def _scan_response_for_injection(
     try:
         from core.security.zef_injection_filter import scan_message, FilterVerdict
         verdict = scan_message(text, source=f"tool_output:{tool_name}")
+        kind, patterns = verdict.verdict, list(verdict.matched_patterns)
+        if not isinstance(kind, FilterVerdict):
+            raise TypeError(f"scan_message returned verdict {kind!r}")
     except Exception as scan_err:
         # Fail closed: output we could not scan is not forwarded.
         logger.error("[gateway] output scan unavailable for %s: %s corr=%s — withholding",
@@ -394,10 +436,10 @@ def _scan_response_for_injection(
             error="Tool output could not be scanned for prompt injection and was withheld.",
             metadata={"output_scan_failed": True},
         )
-    if verdict.verdict is FilterVerdict.BLOCK:
+    if kind is FilterVerdict.BLOCK:
         logger.warning(
             "[gateway] indirect-injection BLOCKED in %s output corr=%s patterns=%s",
-            tool_name, corr_id, verdict.matched_patterns,
+            tool_name, corr_id, patterns,
         )
         return ToolResponse(
             success=False,
@@ -408,11 +450,11 @@ def _scan_response_for_injection(
             ),
             metadata={
                 "indirect_injection": True,
-                "matched_patterns": verdict.matched_patterns,
+                "matched_patterns": patterns,
                 "original_length": len(text),
             },
         )
-    if verdict.verdict is FilterVerdict.WARN:
+    if kind is FilterVerdict.WARN:
         # Not definitive enough to drop (dropping a low-confidence hit
         # would cost utility), but this content came from an external
         # tool and tripped a suspicious pattern. Tag it with provenance
@@ -421,13 +463,13 @@ def _scan_response_for_injection(
         # BLOCK branch above only caught high-confidence payloads.
         logger.info(
             "[gateway] tool output from %s flagged untrusted (WARN) corr=%s patterns=%s",
-            tool_name, corr_id, verdict.matched_patterns,
+            tool_name, corr_id, patterns,
         )
         merged = dict(resp.metadata or {})
         merged.update({
             "untrusted_content": True,
             "provenance": "external_tool_output",
-            "provenance_warnings": verdict.matched_patterns,
+            "provenance_warnings": patterns,
         })
         return ToolResponse(
             success=resp.success,

@@ -83,7 +83,23 @@ def register_server(server: MCPServer) -> None:
     MCP_SERVERS[server.name] = server
 
 
+_schema_lock = threading.Lock()
+_schema_ready: set = set()
+
+
 def _init_schema(db_path: Path) -> None:
+    """Create tables once per DB path per process. Serialised by a lock:
+    concurrent first-time `PRAGMA journal_mode=WAL` on a fresh file can
+    fail with "database is locked" instead of waiting."""
+    key = str(Path(db_path).resolve())
+    with _schema_lock:
+        if key in _schema_ready:
+            return
+        _create_schema(Path(db_path))
+        _schema_ready.add(key)
+
+
+def _create_schema(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = open_db(str(db_path))
     try:

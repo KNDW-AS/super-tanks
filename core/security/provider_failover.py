@@ -6,8 +6,10 @@ Layer 12 — Provider Failover with GO-Gate. *No silent downgrade.*
 Rule: when an agent moves from a provider in a higher trust tier to one in a
 lower tier (see Layer 11, :mod:`core.security.provider_trust`), the switch is
 not automatic. A GO-Gate approval request is created; until a human approves
-it the message is *queued*, never sent to the less-trusted provider. Same or
-higher tier switches are automatic.
+it the message is never sent to the less-trusted provider. On deny or
+timeout the result has ``queued=True``: a signal to the caller to hold the
+message. This module keeps no queue and does not retry. Same or higher tier
+switches are automatic.
 
 Approval uses the existing :class:`core.ask_admin.ApprovalStore` — the same
 store the GO-Gate daemon, the Telegram approve/deny buttons and

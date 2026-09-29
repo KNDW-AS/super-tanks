@@ -36,14 +36,15 @@ logger = logging.getLogger("super_tanks.tool_zones")
 
 
 class Zone(str, Enum):
-    FILESYSTEM_RO = "filesystem_ro"   # read local files / memory
-    NETWORK_READ = "network_read"     # public read-only network, pure compute
-    SMARTHOUSE = "smarthouse"         # home automation / local devices
-    AGENT_COMMS = "agent_comms"       # signed inter-agent messaging (A2A)
+    FILESYSTEM_RO = "filesystem_ro"   # read local files / memory / status
+    NETWORK_READ = "network_read"     # read-only network (public or LAN), pure compute
+    TASKS = "tasks"                   # the agents' own task list
+    AGENT_COMMS = "agent_comms"       # signed A2A messages, household notifications
+    SMARTHOUSE = "smarthouse"         # physical actuation: locks, climate, lights
     FILESYSTEM_RW = "filesystem_rw"   # write files / memory
     NETWORK_WRITE = "network_write"   # outbound side effects (send, post, generate)
     EXEC = "exec"                     # code / shell execution
-    ADMIN = "admin"                   # high-privilege mutations
+    ADMIN = "admin"                   # destructive or high-privilege mutations
     UNCATEGORIZED = "uncategorized"   # unknown tool — fail-closed default
 
 
@@ -53,6 +54,28 @@ class ZoneAction(str, Enum):
     DENY = "deny"
 
 
+# Rationale for the defaults (the rule, then the judgement calls):
+#   Rule: anything that changes the physical world, writes durable
+#   state, sends data out, executes code or deletes needs a human GO.
+#   Reading, pure computation and the agents' own bookkeeping do not.
+#   - home_assistant: can switch lights, climate and locks → SMARTHOUSE
+#     (GO-Gate).
+#   - yale: the reference implementation only reads lock status and
+#     history, but the name maps to lock hardware and this repo ships no
+#     implementation, so it defaults to SMARTHOUSE (GO-Gate). A
+#     deployment whose `yale` is provably read-only can re-map it.
+#   - pet_camera: the reference implementation reads camera status and
+#     keeps an in-memory feeding log; it drives no hardware → NETWORK_READ.
+#   - ha_search / ha_config: read Home Assistant state only → NETWORK_READ.
+#   - notify_home: pushes a message/TTS to household devices; no state
+#     change beyond the notification → AGENT_COMMS (allow).
+#   - task_add / task_done / task_list: the agents' own task list, no
+#     execution path → TASKS (allow).
+#   - password: a stateless local generator (secrets module); it reads
+#     and stores nothing → NETWORK_READ with calculator (allow).
+#   - plan_task: sends the task text to an external LLM for a plan,
+#     read-only → NETWORK_READ. Provider stripping (layer 11) applies to
+#     that call, not this layer.
 TOOL_ZONES: Dict[str, Zone] = {
     # filesystem_ro
     "file_read": Zone.FILESYSTEM_RO,
@@ -65,7 +88,6 @@ TOOL_ZONES: Dict[str, Zone] = {
     "hybrid_search": Zone.FILESYSTEM_RO,
     "self_inspect": Zone.FILESYSTEM_RO,
     "trace_reflect": Zone.FILESYSTEM_RO,
-    "task_list": Zone.FILESYSTEM_RO,
     "status": Zone.FILESYSTEM_RO,
     "system_monitor": Zone.FILESYSTEM_RO,
     # network_read
@@ -76,16 +98,21 @@ TOOL_ZONES: Dict[str, Zone] = {
     "github_read": Zone.NETWORK_READ,
     "plan_task": Zone.NETWORK_READ,
     "calculator": Zone.NETWORK_READ,
-    # smarthouse
-    "home_assistant": Zone.SMARTHOUSE,
-    "ha_search": Zone.SMARTHOUSE,
-    "ha_config": Zone.SMARTHOUSE,
-    "yale": Zone.SMARTHOUSE,
-    "pet_camera": Zone.SMARTHOUSE,
-    "notify_home": Zone.SMARTHOUSE,
+    "password": Zone.NETWORK_READ,
+    "ha_search": Zone.NETWORK_READ,
+    "ha_config": Zone.NETWORK_READ,
+    "pet_camera": Zone.NETWORK_READ,
+    # tasks
+    "task_list": Zone.TASKS,
+    "task_add": Zone.TASKS,
+    "task_done": Zone.TASKS,
     # agent_comms
     "a2a_send": Zone.AGENT_COMMS,
     "a2a_receive": Zone.AGENT_COMMS,
+    "notify_home": Zone.AGENT_COMMS,
+    # smarthouse (physical actuation)
+    "home_assistant": Zone.SMARTHOUSE,
+    "yale": Zone.SMARTHOUSE,
     # filesystem_rw
     "file_write": Zone.FILESYSTEM_RW,
     "memory_store": Zone.FILESYSTEM_RW,
@@ -93,8 +120,6 @@ TOOL_ZONES: Dict[str, Zone] = {
     "memory_tools": Zone.FILESYSTEM_RW,
     "memory_consolidate": Zone.FILESYSTEM_RW,
     "shadow_store_propose": Zone.FILESYSTEM_RW,
-    "task_add": Zone.FILESYSTEM_RW,
-    "task_done": Zone.FILESYSTEM_RW,
     # network_write
     "image_generate": Zone.NETWORK_WRITE,
     # exec
@@ -104,14 +129,14 @@ TOOL_ZONES: Dict[str, Zone] = {
     # admin
     "memory_delete": Zone.ADMIN,
     "propose_code_change": Zone.ADMIN,
-    "password": Zone.ADMIN,
 }
 
 ZONE_ACTIONS: Dict[Zone, ZoneAction] = {
     Zone.FILESYSTEM_RO: ZoneAction.ALLOW,
     Zone.NETWORK_READ: ZoneAction.ALLOW,
-    Zone.SMARTHOUSE: ZoneAction.ALLOW,
+    Zone.TASKS: ZoneAction.ALLOW,
     Zone.AGENT_COMMS: ZoneAction.ALLOW,
+    Zone.SMARTHOUSE: ZoneAction.GO_GATE,
     Zone.FILESYSTEM_RW: ZoneAction.GO_GATE,
     Zone.NETWORK_WRITE: ZoneAction.GO_GATE,
     Zone.EXEC: ZoneAction.GO_GATE,
@@ -122,9 +147,10 @@ ZONE_ACTIONS: Dict[Zone, ZoneAction] = {
 ZONE_RISK_WEIGHT: Dict[Zone, float] = {
     Zone.FILESYSTEM_RO: 1.0,
     Zone.NETWORK_READ: 1.0,
-    Zone.SMARTHOUSE: 1.0,
+    Zone.TASKS: 1.0,
     Zone.AGENT_COMMS: 1.0,
     Zone.FILESYSTEM_RW: 1.5,
+    Zone.SMARTHOUSE: 2.0,
     Zone.NETWORK_WRITE: 2.0,
     Zone.EXEC: 3.0,
     Zone.ADMIN: 3.0,
@@ -132,18 +158,21 @@ ZONE_RISK_WEIGHT: Dict[Zone, float] = {
 }
 
 
-def get_zone(tool_name: str) -> Zone:
-    """Zone for a tool; UNCATEGORIZED if not mapped."""
+def get_zone(tool_name: str, warn: bool = True) -> Zone:
+    """Zone for a tool; UNCATEGORIZED if not mapped (warns once per call
+    when `warn` is true — the gateway's zone check is the one caller
+    that warns)."""
     zone = TOOL_ZONES.get(tool_name)
     if zone is None:
-        logger.warning("tool %r has no zone — treating as UNCATEGORIZED (GO-Gate)", tool_name)
+        if warn:
+            logger.warning("tool %r has no zone — treating as UNCATEGORIZED (GO-Gate)", tool_name)
         return Zone.UNCATEGORIZED
     return zone
 
 
 def zone_action(tool_name: str) -> ZoneAction:
     """Action the gateway must take for this tool. Unknown zone → GO_GATE."""
-    return ZONE_ACTIONS.get(get_zone(tool_name), ZoneAction.GO_GATE)
+    return ZONE_ACTIONS.get(get_zone(tool_name, warn=False), ZoneAction.GO_GATE)
 
 
 def requires_go_gate(tool_name: str) -> bool:
@@ -151,7 +180,8 @@ def requires_go_gate(tool_name: str) -> bool:
 
 
 def risk_weight(tool_name: str) -> float:
-    return ZONE_RISK_WEIGHT.get(get_zone(tool_name), ZONE_RISK_WEIGHT[Zone.UNCATEGORIZED])
+    return ZONE_RISK_WEIGHT.get(get_zone(tool_name, warn=False),
+                                ZONE_RISK_WEIGHT[Zone.UNCATEGORIZED])
 
 
 def set_tool_zone(tool_name: str, zone: Zone) -> None:

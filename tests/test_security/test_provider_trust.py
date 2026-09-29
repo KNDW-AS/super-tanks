@@ -178,3 +178,33 @@ def test_wrong_types_in_config_are_ignored(tmp_path, monkeypatch):
     pf.load_failover_config(str(cfg))
     assert pt.get_tier("anthropic") == pt.TIER_2_TRUSTED and pt._extra_pii == []
     assert pf.get_fallback_chain("x") == []
+
+
+# Fake tokens are assembled at runtime so secret scanners do not flag
+# this file; none of them is a real credential.
+_FAKE_TOKENS = {
+    "anthropic": "sk-" + "ant-api03-" + "A1b2C3d4E5f6G7h8I9j0_-KlMnOpQrStUv",
+    "openai_proj": "sk-" + "proj-" + "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2",
+    "github_classic": "gh" + "p_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8",
+    "github_oauth": "gh" + "o_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8",
+    "github_pat": "github" + "_pat_" + "11ABCDEFG0123456789_abcdefghijklmnop",
+    "slack": "xo" + "xb-" + "123456789012-1234567890123-AbCdEfGhIjKl",
+    "aws": "AK" + "IA" + "IOSFODNN7EXAMPLE",
+    "bearer": "Bearer " + "abc.DEF-123_456~xyz",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_FAKE_TOKENS))
+def test_unlabelled_token_formats_stripped_at_tier2(kind):
+    token = _FAKE_TOKENS[kind]
+    text = f"here is the credential {token} please use it"
+    for tier in (pt.TIER_2_TRUSTED, pt.TIER_3_MIXED, pt.TIER_4_OPEN):
+        out = pt.strip_context_for_tier(text, tier)
+        secret_part = token.split(" ")[-1]
+        assert secret_part not in out, (kind, tier, out)
+        assert "please use it" in out
+
+
+def test_ordinary_words_not_stripped():
+    text = "the task-list skill asks about github issues and slack channels"
+    assert pt.strip_context_for_tier(text, pt.TIER_2_TRUSTED) == text

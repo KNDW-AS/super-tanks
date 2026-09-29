@@ -39,13 +39,16 @@ commercialised.
 ### What the agents can do
 
 - **Aeris (READ/CHAT, level 2):** smart-home reads + writes
-  (`home_assistant`), task list, memory hierarchy reads, weather, web
+  (`home_assistant`; each write-capable call pauses for GO-Gate, layer
+  8), task list, memory hierarchy reads, weather, web
   search/browse, file reads under allowed roots, calculator, agent-to-agent
   messaging, push notifications.
-- **Zeph (EXEC, level 4):** everything Aeris can do plus shell, Python
-  exec (sandboxed), code edits via the quarantine flow, file writes,
-  memory hierarchy writes, image generation, hierarchical memory
-  delete (ADMIN).
+- **Zeph (EXEC, level 4):** everything Aeris can do plus shell and
+  Python exec, code edits via the quarantine flow, file writes, memory
+  hierarchy writes, image generation, hierarchical memory delete
+  (ADMIN). There is no runtime sandbox for shell/Python exec in this
+  repository; every such call pauses for GO-Gate (layer 8) and counts
+  triple against the circuit breaker (layer 7).
 
 Full per-agent allowlists in
 `core/security/tool_allowlists.py::AGENT_ALLOWLISTS`.
@@ -70,7 +73,11 @@ Full per-agent allowlists in
 - Neither agent can call `DIQTool.execute()` directly — it's gated
   by a ContextVar set only by `core.gateway.dispatch_tool`
   (`core/diq/diq_tools.py::DIQTool.execute`). Subclasses overriding `execute()`
-  fail at class definition time.
+  fail at class definition time. Limit: the guard covers `execute()`
+  only. Python code running in the same process can still call a
+  tool's `_execute_impl()` directly or set the ContextVar with
+  `mark_gateway_active()`; the guard stops accidental and
+  prompt-constructed bypasses, not deliberately written in-process code.
 
 ## Models in use
 
@@ -95,56 +102,88 @@ defensive mechanism, numbered L1–L12 below). The 14 checks are the same
 controls as they actually run: checks 1–8 in the order
 `core.gateway.dispatch_tool` executes them on every tool call, checks
 9–14 at other points (boot, memory access, code proposals, LLM calls).
-The full dispatch pipeline with outcomes per check is in
+Three checks have no README layer number: memory RBAC + tripwires (10),
+the audit chain (11) and the mode controller + trust score (12). The
+dispatch pipeline with the outcome of each check is in
 `docs/RUNTIME_PIPELINE.md`.
 
-**No silent bypass.** Every gateway check fails closed: a check that
-raises, or whose store is unavailable, produces a deny with an audit row
-(`denied_subsystem`), never a pass. Two deliberate exceptions to "every
-check applies to every caller", both documented and tested: the
-reserved agent ids `system`, `internal` and `test` skip check 3 (the
-per-agent allowlist is keyed by LLM agent and has no entry for them —
-they still need a valid identity token and still pass checks 2 and
-4–8); and an unregistered tool returns `None` (`no_wrapper`) so the
-caller can fall back to its own non-DIQ handler, which is outside this
-gateway's control.
+**No silent bypass — what that means exactly.** Every gateway check
+fails closed: a check that raises, or whose store is unavailable,
+produces a deny with an audit row (`denied_subsystem`), never a pass. An
+exception from the tool itself is returned as `tool_error` with an audit
+row, and a last-resort handler in `dispatch_tool` turns any other
+exception into an audited `denied_subsystem`, so no exception escapes
+`dispatch_tool`. Known exceptions to "every call is checked and
+audited", all documented and tested:
+
+- the reserved agent ids `system` and `internal` skip check 3 (the
+  per-agent allowlist is keyed by LLM agent and has no entry for them).
+  They still need a valid identity token and pass checks 2 and 4–8;
+- an unregistered tool returns `None` (`no_wrapper`, audited) so the
+  caller can fall back to its own non-DIQ handler, which is outside this
+  gateway;
+- the audit write itself is fail-open: if `record_dispatch` cannot write,
+  it logs an error and the dispatch result is still returned. The chain
+  verifier detects missing or altered rows afterwards.
+
+**`agent_role` is asserted by the caller.** `dispatch_tool` does not
+verify it. It is bound only by the identity token (who is calling) and
+the allowlist (which tools that agent may call): an agent with a valid
+token can claim ADMIN for any tool on its allowlist. The role check
+(check 2) protects against honest mistakes, not against a caller that
+lies about its role.
+
+`dispatch_tool` does **not** consult the mode controller or the trust
+score (check 12). Those are used by memory access control, code
+quarantine and the agent loop (the loop is not in this repository).
 
 ### In the dispatch path (`core/gateway.py::_dispatch_inner`)
 
 1. **Identity verification** — HMAC-SHA-256 token per agent, checked
    before the registry lookup so unauthenticated callers cannot probe
    the tool surface (`core/security/agent_identity.py::verify_identity`).
-   Part of L3.
+   L3.
 2. **DIQ role check** — `READ < CHAT < WRITE < EXEC < ADMIN`
-   (`core/diq/diq_tools.py::DIQTool.validate_access`). L3.
+   (`core/diq/diq_tools.py::DIQTool.validate_access`). Caller-asserted
+   role, see above. L3.
 3. **Per-agent tool allowlist** — unknown agent → deny
    (`core/security/tool_allowlists.py::is_tool_allowed`). L4.
 4. **allowed_agents** — per-tool agent scope; `[]` means all
    (`DIQTool.allowed_agents`, `core/gateway.py::_check_allowed_agents`).
-   L10.
-5. **Tool zone + GO-Gate** — the tool's zone decides allow / GO-Gate /
-   deny; unknown tools require GO-Gate. GO-Gate pauses the call
-   (`pending_approval`, approval request id in the response metadata)
-   until a human approves it in `ApprovalStore`; a human deny of the
-   identical call stays a deny (`core/security/tool_zones.py`,
-   `core/ask_admin.py::gate_tool_call`). L8 + L5.
-6. **MCP server trust** — only for tools whose `mcp_server()` is set:
-   verified → allow, provisional → GO-Gate, quarantined/unknown → deny
-   (`core/security/mcp_security.py`). L9.
-7. **Circuit breaker** — per-agent weighted rate limit, weight from the
+   L10. The skill contract declares the same rule
+   (`DIQSkill.allowed_agents`), but skills do not pass through the
+   gateway and this repository has no skill dispatch path, so it is not
+   enforced for skills.
+5. **Circuit breaker** — per-agent weighted rate limit, weight from the
    tool's zone; lockout persisted in SQLite
-   (`core/security/circuit_breaker.py`). L7.
+   (`core/security/circuit_breaker.py`). Checked twice: a pre-check
+   before GO-Gate that records nothing (a locked-out agent cannot open
+   approval requests), and check-and-record as the last step before
+   execute (only executed calls consume budget). L7.
+6. **Tool zone + GO-Gate** — the tool's zone decides allow / GO-Gate /
+   deny; unknown tools require GO-Gate. GO-Gate returns
+   `pending_approval` with the approval request id; the call is not
+   resumed automatically — after a human approves in `ApprovalStore`,
+   the caller re-issues the identical call (within 1 h). A human deny
+   of the identical call stays a deny for 1 h
+   (`core/security/tool_zones.py`, `core/ask_admin.py::gate_tool_call`).
+   L8 + L5.
+7. **MCP server trust** — only for tools whose `mcp_server()` is set:
+   verified → allow, provisional → GO-Gate, quarantined/unknown → deny
+   (`core/security/mcp_security.py`). One approval covers both the zone
+   gate and the provisional-MCP gate (same tool + agent + argument
+   key). L9.
 8. **Gateway chokepoint + output scan** — `DIQTool.execute()` refuses
-   to run outside the gateway ContextVar (`core/diq/diq_tools.py::
-   DIQTool.execute`; overriding `execute()` fails at class definition),
-   and tool output is re-scanned by the ZEF filter before it is
-   returned: high-confidence injection is redacted, WARN-level content
-   is tagged `untrusted_content`, and output that cannot be scanned is
-   withheld (`core/gateway.py::_scan_response_for_injection`). L3 + L1.
+   to run outside the gateway ContextVar (limits above), and tool output
+   is re-scanned by the ZEF regex filter before it is returned:
+   high-confidence injection is redacted, WARN-level content is tagged
+   `untrusted_content`, and output that cannot be scanned is withheld
+   (`core/gateway.py::_scan_response_for_injection`). L3 + L1.
 
 Every outcome of checks 1–8 is written to the HMAC-chained
 `dispatch_log` with a per-dispatch `correlation_id`
-(`core/security/dispatch_audit.py`).
+(`core/security/dispatch_audit.py`), subject to the fail-open audit
+write noted above.
 
 ### Outside the dispatch path
 
@@ -155,17 +194,20 @@ Every outcome of checks 1–8 is written to the HMAC-chained
    inbound messages; the agent loop is not part of this repository. L1.
 10. **Memory RBAC + tripwires** — every memory op gates on
     `is_path_accessible` and `is_tripwire` (`core/memory/secure_store.py`,
-    `core/memory/access_control.py`, `core/memory/tripwires.py`).
+    `core/memory/access_control.py`, `core/memory/tripwires.py`). No
+    layer number.
 11. **Tamper-evident audit evidence** — dispatch, memory, threat,
     trust and approval rows are HMAC-chained
     (`core/security/audit_chain.py`) with a key separate from the
     identity key (`core/security/audit_key.py`); the threat monitor
-    verifies all chains (P4–P7) and forces SAFE_MODE on a break.
+    verifies all chains (P4–P7) and forces SAFE_MODE on a break. No
+    layer number.
 12. **Mode controller + trust score** — LOCKDOWN by default,
     AUTONOMOUS times out to LOCKDOWN, Night Mode shrinks Zeph to
     observation-only (`core/security/super_tanks_mode.py`); five
     behavioural trust levels with decay and tripwire penalties
-    (`core/security/trust_score.py`).
+    (`core/security/trust_score.py`). Not consulted by `dispatch_tool`.
+    No layer number.
 13. **Code quarantine** — static AST scan of agent-authored code
     proposals; sandbox-escape patterns are a hard fail with no override
     (`core/zeph_quarantine.py`, `core/zeph_quarantine_ast.py`). This is
@@ -174,9 +216,9 @@ Every outcome of checks 1–8 is written to the HMAC-chained
     contracts (L3) are SHA-256 sealed with an anti-rollback generation
     floor (`core/soul_guard.py`, `core/diq/diq_integrity.py`,
     `core/security/integrity_floor.py`); LLM providers are tiered and
-    prompts stripped per tier (L11, `core/security/provider_trust.py`);
-    moving to a less-trusted provider needs GO-Gate (L12,
-    `core/security/provider_failover.py`).
+    prompts regex-stripped per tier (L11, `core/security/provider_trust.py`);
+    moving to a less-trusted provider needs GO-Gate and is refused (not
+    queued) when denied (L12, `core/security/provider_failover.py`).
 
 ### Layer → check map
 
@@ -186,17 +228,15 @@ Every outcome of checks 1–8 is written to the HMAC-chained
 | L2 Soul Files | 14 |
 | L3 DIQ Layer | 1, 2, 8, 14 |
 | L4 Allowlists | 3 |
-| L5 GO-Gate | 5, 6 (provisional MCP), 14 (L12) |
+| L5 GO-Gate | 6, 7 (provisional MCP), 14 (L12) |
 | L6 Sandbox (static AST scan) | 13 |
-| L7 Circuit Breaker | 7 |
-| L8 Tool Zone Isolation | 5 |
-| L9 MCP Security Manager | 6 |
+| L7 Circuit Breaker | 5 |
+| L8 Tool Zone Isolation | 6 |
+| L9 MCP Security Manager | 7 |
 | L10 allowed_agents | 4 |
 | L11 Provider Trust Tier | 14 |
 | L12 Provider Failover GO-Gate | 14 |
-
-Checks 10–12 (memory RBAC, audit chain, mode/trust) are supporting
-controls without their own README layer number.
+| no layer number | 10, 11, 12 |
 
 `core/bootstrap.py::boot` runs the start-up checks in order (DIQ
 integrity, soul integrity, mode, admin, tripwires, upstream tier,
@@ -242,7 +282,7 @@ outside this open-source release and is responsible for calling
 
 ## Validation
 
-- Test surface: 1,543 pytest tests (collected in CI; `pytest.ini` enforces a
+- Test surface: 1,576 pytest tests (collected in CI; `pytest.ini` enforces a
   70% coverage floor on `core/` and `scripts/`).
 - Concurrency tests for trust_score, audit_log, hierarchical_store,
   approval store atomicity.

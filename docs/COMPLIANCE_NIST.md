@@ -32,12 +32,12 @@ For convenience, the controls referenced below:
 | 2 | Soul Files | `core/soul_guard.py` (SHA256 check → `SOUL_SAFE_MODE`) |
 | 3 | DIQ Layer | `core/diq/` (`diq_integrity.py`, `diq_tools.py`, `diq_registry.py`, `diq_a2a.py`, …) |
 | 4 | Allowlists | `core/security/tool_allowlists.py` |
-| 5 | GO-Gate | `core/go_gate_approval_daemon.py` (Telegram approval, `request_id`) |
+| 5 | GO-Gate | `core/ask_admin.py` (`ApprovalStore`, `gate_tool_call` — called by the gateway for gated zones and provisional MCP servers); `core/go_gate_approval_daemon.py` (Telegram approval front-end) |
 | 6 | Sandbox | `core/zeph_quarantine_ast.py`, `core/zeph_quarantine.py` (static AST screening before approval). `Dockerfile` / `docker-compose.yml` provide *deployment* isolation for the application as a whole — they do not contain approved agent code at runtime. See Layer 6 honesty note below |
-| 7 | Circuit Breaker | `core/security/trust_score.py`, `core/security/super_tanks_mode.py` (LOCKDOWN / Night) |
-| 8 | Tool Zone Isolation | tool-zone partitioning enforced via gateway dispatch + allowlists |
-| 9 | MCP Security Manager | trust-level enforcement for MCP servers (described as Layer 9; no dedicated `mcp_*` module is present in this OSS snapshot — see caveat below) |
-| 10 | allowed_agents | skill-level isolation per agent (enforced in `core/diq/diq_skills.py` + allowlists) |
+| 7 | Circuit Breaker | `core/security/circuit_breaker.py` — per-agent weighted rate limit, checked in `core/gateway.py` before GO-Gate and recorded before execute. (The mode controller `super_tanks_mode.py` and trust score `trust_score.py` are separate controls; `dispatch_tool` does not consult them.) |
+| 8 | Tool Zone Isolation | `core/security/tool_zones.py` (zone map + allow / GO-Gate / deny), enforced in `core/gateway.py::_check_tool_zone` |
+| 9 | MCP Security Manager | `core/security/mcp_security.py` (persisted trust levels), enforced in `core/gateway.py::_check_mcp_trust` for tools whose `DIQTool.mcp_server()` is set. A trust gate only: it does not scan, sign-check or sandbox MCP servers |
+| 10 | allowed_agents | `DIQTool.allowed_agents()` enforced in `core/gateway.py::_check_allowed_agents`. `DIQSkill.allowed_agents()` (`core/diq/diq_skills.py`) is declared but not enforced: skills do not pass through the gateway and this repository has no skill dispatch path |
 | 11 | Provider Trust Tier | `core/security/provider_trust.py` (tier map + strip rules, `config/providers.yaml`), audited per call in `core/council/council.py` |
 | 12 | Provider Failover GO-Gate | `core/security/provider_failover.py` (downgrade → `ApprovalStore` request, fail-closed) |
 | — | HMAC agent identity | `core/security/agent_identity.py` |
@@ -45,13 +45,6 @@ For convenience, the controls referenced below:
 | — | Dispatch audit | `core/security/dispatch_audit.py` (`correlation_id`) |
 | — | A2A signature verify | `core/a2a/escalation_rules.py` (`verify_or_drop`) → `core/security/agent_identity.py` (`verify_a2a_message`) |
 | — | User access | `core/security/user_manager.py` (5-level user access) |
-
-> **Layer 9 honesty note.** "MCP Security Manager" is documented as an
-> architectural layer (trust-level enforcement for MCP servers). In this
-> open-source snapshot there is no standalone `mcp_security_manager.py` module;
-> MCP trust handling is realised through DIQ frozen contracts (`core/diq/`),
-> allowlists, and tool-zone isolation rather than a single named file. Treat
-> Layer 9's *code* coverage as partial.
 
 > **Layer 6 honesty note.** "Sandbox" means *static* screening: the AST scanner
 > (`core/zeph_quarantine_ast.py`) inspects agent-generated code before it can be
@@ -84,7 +77,7 @@ Policies, accountability, and structures that make risk management work.
 | GOVERN 3 — workforce / human oversight culture | GO-Gate human-in-the-loop (5) `core/go_gate_approval_daemon.py`; [docs/INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md), [docs/CODY_ONBOARDING.md](CODY_ONBOARDING.md) | Strong for oversight; organisational culture is out of software scope |
 | GOVERN 4 — risk-aware org commitments | [docs/RISK_REGISTER.md](RISK_REGISTER.md) (tracked risks, e.g. R-06, R-22); Soul Files integrity commitment (2) | Moderate (process docs + identity sealing) |
 | GOVERN 5 — engagement with affected parties / feedback | `SECURITY.md` disclosure process; GO-Gate operator notifications | Partial |
-| GOVERN 6 — third-party / supply-chain risk policy | MCP Security Manager (9) trust levels; DIQ frozen contracts (3); Sandbox (6) | Moderate — see Layer 9 honesty note |
+| GOVERN 6 — third-party / supply-chain risk policy | MCP Security Manager (9) trust levels; DIQ frozen contracts (3); Sandbox (6) | Moderate — Layer 9 is a trust gate on dispatch; it does not scan MCP servers |
 
 ### MAP
 
@@ -123,9 +116,9 @@ Prioritise and act on risks; respond, recover, communicate.
 | RMF area | Super Tanks layer(s) / module(s) | Coverage |
 |---|---|---|
 | MANAGE 1 — risks prioritised & acted on | [docs/RISK_REGISTER.md](RISK_REGISTER.md); default-deny allowlists (4) act on highest-impact tool-misuse risk by construction | Strong |
-| MANAGE 2 — strategies to maximise benefit / minimise harm | GO-Gate (5) gates risky actions; Sandbox (6) contains untrusted execution; Circuit Breaker (7) | Strong |
+| MANAGE 2 — strategies to maximise benefit / minimise harm | GO-Gate (5) gates risky actions; Sandbox (6) statically screens code proposals (no runtime containment); Circuit Breaker (7) | Strong |
 | MANAGE 3 — third-party risk managed | MCP Security Manager (9) trust levels; A2A `verify_or_drop` drops unsigned/tampered messages | Moderate |
-| MANAGE 4 — risk treatment monitored & responses planned | Circuit Breaker LOCKDOWN / Night mode `core/security/super_tanks_mode.py`; Soul `SAFE_MODE` on hash mismatch `core/soul_guard.py`; [docs/INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) | Strong |
+| MANAGE 4 — risk treatment monitored & responses planned | Circuit Breaker (7) lockout `core/security/circuit_breaker.py`; mode controller LOCKDOWN / Night mode `core/security/super_tanks_mode.py` (not consulted by `dispatch_tool`); Soul `SAFE_MODE` on hash mismatch `core/soul_guard.py`; [docs/INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) | Strong |
 
 ---
 
@@ -140,7 +133,7 @@ accuracy, harmful-bias output) are out of scope.
 |---|---|---|---|
 | Information Security (incl. prompt injection, model/agent compromise) | MEASURE / MANAGE security actions | ZEF Firewall (1) + tool-output re-scan (`gateway._scan_response_for_injection`); Sandbox (6); Soul Files (2); allowlists (4) | Strong |
 | Data Privacy / leakage | MAP / MANAGE | Tool Zone Isolation (8); allowlists (4); audit sanitiser (`core/security/audit_sanitizer.py`); egress restrictions | Moderate |
-| Value Chain & Component Integration (third-party tools/MCP) | GOVERN / MAP | MCP Security Manager (9); DIQ frozen contracts (3); Sandbox (6) | Moderate — Layer 9 honesty note applies |
+| Value Chain & Component Integration (third-party tools/MCP) | GOVERN / MAP | MCP Security Manager (9); DIQ frozen contracts (3); Sandbox (6) | Moderate — Layer 9 is a trust gate on dispatch; it does not scan MCP servers |
 | Human-AI Configuration / over-reliance | GOVERN / MANAGE | GO-Gate human-in-the-loop (5) with Telegram approval and operator notification | Strong (oversight); behavioural over-reliance not measured |
 | Confabulation / inaccurate output | MEASURE | *Not addressed* — Super Tanks does not evaluate model factual accuracy | Out of scope |
 | Dangerous/violent/CBRN content; obscene content; harmful bias & homogenisation | MEASURE / MANAGE | *Not addressed by the control plane* — content-safety filtering of model outputs is outside Super Tanks' threat model (a deployer would add a content classifier) | Out of scope |
@@ -175,25 +168,25 @@ are in development as of 2026.
 | Agent identity & authentication | HMAC agent identity `core/security/agent_identity.py`; Soul Files (2) SHA256-sealed identity → `SAFE_MODE` on mismatch | Strong |
 | Least-privilege / scoped autonomy | Default-deny allowlists (4); `allowed_agents` (10); Tool Zone Isolation (8); 5-level user access | Strong |
 | Bounded tool use / frozen action surface | DIQ declarative contracts (3) `core/diq/`; Tool Zone Isolation (8) | Strong |
-| Human oversight of consequential actions | GO-Gate (5) human-in-the-loop, single-use `request_id`, time-bounded approval via Telegram | Strong |
+| Human oversight of consequential actions | GO-Gate (5) human-in-the-loop in the gateway; approval bound to tool + agent + argument hash and reusable for 1 h for that identical call; 5-min TTL on pending requests | Strong |
 | Indirect / tool-mediated prompt injection | ZEF Firewall (1) + tool-output re-scan and provenance tagging (`gateway._scan_response_for_injection`) | Strong |
 | Inter-agent (A2A) communication integrity | A2A signature verify `core/a2a/escalation_rules.py` (`verify_or_drop`) → `agent_identity.verify_a2a_message`; unsigned/tampered messages dropped | Strong |
 | Containment of untrusted execution | Sandbox (6) AST scanner `core/zeph_quarantine_ast.py` screens agent-generated code before approval; once approved, code runs in-process with the application's privileges | **Partial** — AST is preventative-only. A runtime sandbox wrapping approved code *and* the pip upgrade path is the top open item (R-04, [RISK_REGISTER.md](RISK_REGISTER.md)) |
-| Cascading-failure / runaway containment | Circuit Breaker (7) `core/security/trust_score.py`; LOCKDOWN / Night mode `core/security/super_tanks_mode.py` | Strong |
+| Cascading-failure / runaway containment | Circuit Breaker (7) `core/security/circuit_breaker.py`; LOCKDOWN / Night mode `core/security/super_tanks_mode.py` (not consulted by `dispatch_tool`) | Strong |
 | Memory / context poisoning resistance | Soul Files (2); memory tripwires `core/memory/tripwires.py`; secure store `core/memory/secure_store.py`; DIQ (3) | Moderate |
 | Tamper-evident agent action logging | Hash-chained audit `core/security/audit_chain.py` (per-row HMAC + checkpoint sidecar); dispatch audit with `correlation_id` `core/security/dispatch_audit.py` | Strong |
-| Supply-chain trust for agent tools/MCP | MCP Security Manager (9) trust levels; DIQ frozen contracts (3); Sandbox (6) | Moderate — Layer 9 honesty note applies |
+| Supply-chain trust for agent tools/MCP | MCP Security Manager (9) trust levels; DIQ frozen contracts (3); Sandbox (6) | Moderate — Layer 9 is a trust gate on dispatch; it does not scan MCP servers |
 
 ---
 
 ## Summary of coverage posture
 
 - **Strongest:** agent identity, least-privilege tool access, human-in-the-loop
-  oversight, prompt-injection defence, inter-agent message integrity, untrusted-
-  code containment, and tamper-evident traceability — the core of an agentic
+  oversight, prompt-injection defence, inter-agent message integrity, static screening of
+  agent-authored code, and tamper-evident traceability — the core of an agentic
   control plane.
-- **Moderate / partial:** supply-chain (MCP) trust enforcement (Layer 9 has no
-  dedicated module in this OSS snapshot), memory-poisoning resistance, and
+- **Moderate / partial:** supply-chain (MCP) trust enforcement (Layer 9 is a
+  trust gate; trust levels are set by a human and servers are not scanned), memory-poisoning resistance, and
   quantitative measurement beyond the prompt-injection baseline.
 - **Out of scope:** generative-content quality and safety (confabulation, bias,
   toxicity, CBRN uplift) and other non-security trustworthiness characteristics

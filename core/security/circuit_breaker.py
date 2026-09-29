@@ -4,8 +4,10 @@ core/security/circuit_breaker.py — Layer 7: per-agent circuit breaker.
 OWASP Agentic Top 10 (2026): ASI08 Cascading Failures, ASI02 Tool Misuse
 (partial).
 
-Every tool call that reaches the end of the gateway pipeline is recorded
-against the calling agent with a risk weight (see
+The gateway checks the breaker twice: `check()` before GO-Gate (records
+nothing, so a locked-out agent cannot even open approval requests) and
+`check_and_record()` as the last step before execute. Only calls that
+execute are recorded, each with its zone's risk weight (see
 `core.security.tool_zones.risk_weight`). When the weighted sum inside the
 sliding window reaches `max_actions`, the agent is locked out for
 `lockout_seconds`. State lives in SQLite (`data/circuit_breaker.db` by
@@ -56,7 +58,23 @@ class CircuitBreakerError(Exception):
         self.locked_until = locked_until
 
 
+_schema_lock = threading.Lock()
+_schema_ready: set = set()
+
+
 def _init_schema(db_path: Path) -> None:
+    """Create tables once per DB path per process. Serialised by a lock:
+    concurrent first-time `PRAGMA journal_mode=WAL` on a fresh file can
+    fail with "database is locked" instead of waiting."""
+    key = str(Path(db_path).resolve())
+    with _schema_lock:
+        if key in _schema_ready:
+            return
+        _create_schema(Path(db_path))
+        _schema_ready.add(key)
+
+
+def _create_schema(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = open_db(str(db_path))
     try:
@@ -96,7 +114,9 @@ def _alert(event: str, agent: str, details: dict) -> None:
 
 
 class CircuitBreaker:
-    DEFAULT_MAX_ACTIONS = 30        # weighted units per window
+    # 30 weighted units per 60 s: a call costs its zone's risk weight
+    # (1.0 for read-only zones ... 5.0 for an unmapped tool).
+    DEFAULT_MAX_ACTIONS = 30
     DEFAULT_WINDOW_SECONDS = 60
     DEFAULT_LOCKOUT_SECONDS = 300
 
@@ -116,12 +136,26 @@ class CircuitBreaker:
         self.db_path = Path(db_path) if db_path is not None else DB_PATH
         _init_schema(self.db_path)
 
+    def check(self, tool_name: str, weight: float = 1.0) -> None:
+        """Same decision as check_and_record() but records no usage.
+
+        The gateway calls this before GO-Gate (so a locked-out agent
+        cannot open approval requests) and check_and_record() only when
+        the call is about to execute (so paused or denied calls cost no
+        budget). An over-budget check still trips the lockout.
+        """
+        self._decide(tool_name, weight, record=False)
+
     def check_and_record(self, tool_name: str, weight: float = 1.0) -> bool:
         """Allow-and-record, or raise CircuitBreakerError.
 
         Atomic (BEGIN IMMEDIATE): two concurrent callers cannot both
         pass the threshold check. Internal errors propagate (fail closed).
         """
+        self._decide(tool_name, weight, record=True)
+        return True
+
+    def _decide(self, tool_name: str, weight: float, record: bool) -> None:
         now = time.time()
         conn = open_db(str(self.db_path), isolation_level=None)
         try:
@@ -172,13 +206,13 @@ class CircuitBreaker:
                     locked_until=locked_until,
                 )
 
-            conn.execute(
-                "INSERT INTO circuit_breaker_actions (agent, tool_name, weight, ts) "
-                "VALUES (?, ?, ?, ?)",
-                (self.agent, tool_name, float(weight), now),
-            )
+            if record:
+                conn.execute(
+                    "INSERT INTO circuit_breaker_actions (agent, tool_name, weight, ts) "
+                    "VALUES (?, ?, ?, ?)",
+                    (self.agent, tool_name, float(weight), now),
+                )
             conn.execute("COMMIT")
-            return True
         except BaseException:
             if conn.in_transaction:
                 try:

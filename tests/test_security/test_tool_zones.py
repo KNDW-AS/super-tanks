@@ -22,6 +22,11 @@ def test_unknown_tool_is_uncategorized_and_gated():
     ("file_read", ZoneAction.ALLOW),
     ("web_search", ZoneAction.ALLOW),
     ("a2a_send", ZoneAction.ALLOW),
+    ("task_add", ZoneAction.ALLOW),
+    ("password", ZoneAction.ALLOW),
+    ("ha_search", ZoneAction.ALLOW),
+    ("home_assistant", ZoneAction.GO_GATE),
+    ("yale", ZoneAction.GO_GATE),
     ("file_write", ZoneAction.GO_GATE),
     ("shell_exec", ZoneAction.GO_GATE),
     ("memory_delete", ZoneAction.GO_GATE),
@@ -57,3 +62,11 @@ def test_coverage_report_counts():
     assert sum(report["by_zone"].values()) == len(tz.TOOL_ZONES)
     assert report["zone_actions"]["uncategorized"] == "go_gate"
     assert "shell_exec" in tz.get_tools_in_zone(Zone.EXEC)
+
+
+def test_unknown_tool_warns_once_per_dispatch_path(caplog):
+    with caplog.at_level("WARNING", logger="super_tanks.tool_zones"):
+        tz.get_zone("mystery")
+        tz.zone_action("mystery")
+        tz.risk_weight("mystery")
+    assert len([r for r in caplog.records if "mystery" in r.getMessage()]) == 1

@@ -18,7 +18,7 @@ Not a detection tool that reacts after something goes wrong. 12 simultaneous sec
 </p>
 <p align="center"><sub>GO-Gate in action — reproduce it yourself: <code>python3 scripts/demo_go_gate.py</code></sub></p>
 
-> **What is in this repository:** the governance layers (`core/`), 1,543 tests and the ZEF red-team corpus.
+> **What is in this repository:** the governance layers (`core/`), 1,576 tests and the ZEF red-team corpus.
 > **What is not:** the agent main loop (`main_loop.py`), the dashboard API on port 8765 and the private tool adapters.
 > The Docker image and the setup wizard need those, so `./install.sh` and `docker compose` will **not** start an agent from a clone.
 > Everything below runs on any laptop with Python 3.10+, no Docker, no GPU.
@@ -30,7 +30,7 @@ python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\
 pip install -e ".[dev]"
 python -m supertanks doctor      # checks the environment, prints exact fixes
 python -m supertanks demo        # GO-Gate in 10 seconds, no network
-python -m supertanks test        # 1,543 tests, ~80 s, offline
+python -m supertanks test        # 1,576 tests, ~80 s, offline
 ```
 One-click scripts: `installer/windows/install-dev.bat` (Windows 11) · `bash installer/macos/install-dev.sh` (macOS). Details: [docs/INSTALL_DEV.md](docs/INSTALL_DEV.md).
 
@@ -55,13 +55,13 @@ Super Tanks is a compliance-by-design security and governance architecture for a
 | 5 | **GO-Gate** | Human-in-the-loop approval for risky actions |
 | 6 | **Sandbox** | Static AST scan of agent code proposals (`core/zeph_quarantine_ast.py`): banned imports, dynamic exec, builtin obfuscation. Not a runtime container — nothing in this repository executes agent code inside Docker |
 | 7 | **Circuit Breaker** | Per-agent weighted rate limit on tool calls, enforced in the gateway; lockout persists across restarts (`core/security/circuit_breaker.py`) |
-| 8 | **Tool Zone Isolation** | Every tool mapped to one of 9 zones; the zone decides allow / GO-Gate / deny in the gateway; unknown tools require GO-Gate (`core/security/tool_zones.py`) |
+| 8 | **Tool Zone Isolation** | Every tool mapped to one of 10 zones; the zone decides allow / GO-Gate / deny in the gateway; physical actuation, writes, outbound side effects, exec and unknown tools require GO-Gate (`core/security/tool_zones.py`) |
 | 9 | **MCP Security Manager** | Tools that declare an MCP server are checked against its trust level: verified → allow, provisional → GO-Gate, quarantined/unknown → deny (`core/security/mcp_security.py`) |
 | 10 | **allowed_agents** | Per-tool agent scope: `DIQTool.allowed_agents()` (empty = all) enforced in the gateway for every caller |
-| 11 | **Provider Trust Tier** | Every LLM provider classified LOCAL / TRUSTED / MIXED / OPEN; secrets, PII and internal identifiers stripped before a prompt leaves the process; unknown providers fail closed; every call audited (added 2026-09-15) |
-| 12 | **Provider Failover GO-Gate** | No silent downgrade: switching an agent to a less-trusted provider needs a human GO; denied or timed-out approvals queue the message instead (added 2026-09-15) |
+| 11 | **Provider Trust Tier** | Every LLM provider classified LOCAL / TRUSTED / MIXED / OPEN (unknown → OPEN). Before a prompt leaves the process, regex rules strip labelled secrets (`api_key=…`, `token: …`), Bearer tokens, JWTs and known key formats (`sk-`/`sk-ant-`, `ghp_`/`gho_`/`github_pat_`, `xox?-`, `AKIA`/`ASIA`, `AIza`) from tier 2; e-mail, phone, IP, national-id/account-number patterns and configured names from tier 3; home paths and device ids at tier 4. Unlabelled secrets in other formats are not recognised. Every call audited (added 2026-09-15) |
+| 12 | **Provider Failover GO-Gate** | No silent downgrade: switching an agent to a less-trusted provider needs a human GO. If it is denied or times out, the message is not sent to that provider and the caller gets an error (`FailoverResult.queued=True`); there is no queue or automatic retry in this repository (added 2026-09-15) |
 
-Layers 3, 4, 5, 7, 8, 9 and 10 run inside one function, `core.gateway.dispatch_tool`, in a fixed order, and every one of them fails closed. The exact order, the outcome of each check and the integration APIs are in [`docs/RUNTIME_PIPELINE.md`](docs/RUNTIME_PIPELINE.md).
+Layers 3, 4, 5, 7, 8, 9 and 10 run inside one function, `core.gateway.dispatch_tool`, in a fixed order, and every one of them fails closed. Layer 1 (tool-output re-scan) also runs there; layers 2, 6, 11 and 12 run elsewhere (boot, code proposals, LLM calls). The exact order, the outcome of each check and the integration APIs are in [`docs/RUNTIME_PIPELINE.md`](docs/RUNTIME_PIPELINE.md).
 
 ## OWASP Top 10 for Agentic Applications (ASI 2026)
 
@@ -138,7 +138,7 @@ Beyond OWASP, MITRE ATLAS, and the EU AI Act above, Super Tanks publishes two mo
 > **Developers and researchers:** you do not need Docker. See
 > [docs/INSTALL_DEV.md](docs/INSTALL_DEV.md) — one script for Windows 11
 > (`installer/windows/install-dev.bat`) or macOS (`installer/macos/install-dev.sh`)
-> sets up Python, runs the 1,543 tests and the ZEF red-team corpus.
+> sets up Python, runs the 1,576 tests and the ZEF red-team corpus.
 > The Docker path below is for the packaged product and expects the agent main
 > loop, which is not part of this repository.
 

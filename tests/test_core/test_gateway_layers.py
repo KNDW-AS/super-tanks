@@ -284,12 +284,15 @@ class TestCircuitBreaker:
         assert _call("read_tool", agent="test").success is False
 
     def test_pending_calls_do_not_consume_budget(self, env, monkeypatch):
-        monkeypatch.setattr(circuit_breaker.CircuitBreaker, "DEFAULT_MAX_ACTIONS", 1)
+        # Budget 2: a write (weight 1.5) passes the pre-check, pauses in
+        # GO-Gate and records nothing, so two reads still fit afterwards.
+        monkeypatch.setattr(circuit_breaker.CircuitBreaker, "DEFAULT_MAX_ACTIONS", 2)
         circuit_breaker.reset_breakers()
         env["tools"]["write_tool"] = _Tool("write_tool")
         env["tools"]["read_tool"] = _Tool("read_tool")
-        for _ in range(3):
-            _call("write_tool")
+        for i in range(3):
+            assert _call("write_tool", params={"i": i}).metadata["approval_request_id"]
+        assert _call("read_tool").success is True
         assert _call("read_tool").success is True
 
     def test_breaker_db_error_fails_closed(self, env, monkeypatch):
@@ -309,13 +312,13 @@ class TestPipeline:
     def test_order(self, env, monkeypatch):
         env["tools"]["read_tool"] = _Tool("read_tool")
         seen = []
-        for name in ("_check_allowed_agents", "_check_tool_zone",
-                     "_check_mcp_trust", "_check_circuit_breaker"):
+        order = ["_check_allowed_agents", "_precheck_circuit_breaker",
+                 "_check_tool_zone", "_check_mcp_trust", "_record_circuit_breaker"]
+        for name in order:
             monkeypatch.setattr(gateway, name,
                                 (lambda n: lambda *a: seen.append(n))(name))
         assert _call("read_tool").success is True
-        assert seen == ["_check_allowed_agents", "_check_tool_zone",
-                        "_check_mcp_trust", "_check_circuit_breaker"]
+        assert seen == order
 
     def test_allowlist_denial_runs_before_new_layers(self, env, monkeypatch):
         env["tools"]["read_tool"] = _Tool("read_tool", agents=["zeph"])
@@ -341,3 +344,145 @@ class TestPipeline:
         resp = _call("read_tool")
         assert resp.success is False and resp.result is None
         assert resp.metadata["output_scan_failed"] is True
+
+
+# ── Review fixes: exceptions audited, breaker before GO-Gate, weights ───────
+
+class _Raising(_Tool):
+    def __init__(self, name, where):
+        super().__init__(name)
+        self._where = where
+
+    def validate_access(self, request):
+        if self._where == "role":
+            raise RuntimeError("role boom")
+        return super().validate_access(request)
+
+    async def _execute_impl(self, request):
+        if self._where == "execute":
+            raise RuntimeError("exec boom")
+        if self._where == "bad_return":
+            return "not a ToolResponse"
+        return await super()._execute_impl(request)
+
+
+class TestExceptionsAreAudited:
+    def test_execute_raises(self, env):
+        env["tools"]["read_tool"] = _Raising("read_tool", "execute")
+        resp = _call("read_tool")
+        assert resp.success is False and "exec boom" in resp.error
+        assert _verdicts(env["audit"]) == ["tool_error"]
+
+    def test_execute_returns_wrong_type(self, env):
+        env["tools"]["read_tool"] = _Raising("read_tool", "bad_return")
+        resp = _call("read_tool")
+        assert resp.success is False
+        assert _verdicts(env["audit"]) == ["tool_error"]
+
+    def test_validate_access_raises(self, env):
+        env["tools"]["read_tool"] = t = _Raising("read_tool", "role")
+        resp = _call("read_tool")
+        assert resp.success is False and t.calls == []
+        assert "Role check unavailable" in resp.error
+        assert _verdicts(env["audit"]) == ["denied_subsystem"]
+
+    def test_scan_returns_garbage(self, env, monkeypatch):
+        import core.security.zef_injection_filter as zef
+        env["tools"]["read_tool"] = _Tool("read_tool", result="perfectly normal text")
+        monkeypatch.setattr(zef, "scan_message", lambda *a, **k: None)
+        resp = _call("read_tool")
+        assert resp.success is False and resp.metadata["output_scan_failed"] is True
+        assert _verdicts(env["audit"]) == ["allowed"]
+
+    def test_scan_returns_unknown_verdict(self, env, monkeypatch):
+        import types
+        import core.security.zef_injection_filter as zef
+        env["tools"]["read_tool"] = _Tool("read_tool", result="perfectly normal text")
+        monkeypatch.setattr(zef, "scan_message", lambda *a, **k: types.SimpleNamespace(
+            verdict="PASS-ish", matched_patterns=[]))
+        resp = _call("read_tool")
+        assert resp.success is False and resp.metadata["output_scan_failed"] is True
+
+    def test_unexpected_error_is_caught_and_audited(self, env, monkeypatch):
+        def boom(*_a, **_k):
+            raise RuntimeError("request build failed")
+        monkeypatch.setattr(gateway, "ToolRequest", boom)
+        env["tools"]["read_tool"] = _Tool("read_tool")
+        resp = _call("read_tool")
+        assert resp.success is False and "request build failed" in resp.error
+        assert _verdicts(env["audit"]) == ["denied_subsystem"]
+
+
+class TestBreakerBeforeGoGate:
+    def test_locked_agent_creates_zero_approval_requests(self, env, monkeypatch):
+        monkeypatch.setattr(circuit_breaker.CircuitBreaker, "DEFAULT_MAX_ACTIONS", 1)
+        circuit_breaker.reset_breakers()
+        env["tools"]["read_tool"] = _Tool("read_tool")
+        env["tools"]["write_tool"] = w = _Tool("write_tool")
+        assert _call("read_tool").success is True
+        assert _call("read_tool").success is False      # trips the lockout
+        for i in range(25):
+            resp = _call("write_tool", params={"i": i})
+            assert resp.success is False
+        assert env["store"].list_pending() == []
+        assert w.calls == []
+        assert set(_verdicts(env["audit"])[2:]) == {"denied_circuit_breaker"}
+
+    def test_approved_call_still_counts_once(self, env, monkeypatch):
+        env["tools"]["write_tool"] = _Tool("write_tool")
+        rid = _call("write_tool").metadata["approval_request_id"]
+        env["store"].approve_request(rid, "human")
+        assert _call("write_tool").success is True
+        load = circuit_breaker.get_breaker("aeris").get_status()["load_in_window"]
+        assert load == tool_zones.risk_weight("write_tool")
+
+
+class TestBreakerWeight:
+    def test_breaker_receives_zone_risk_weight(self, env, monkeypatch):
+        seen = []
+        real = circuit_breaker.CircuitBreaker.check_and_record
+
+        def spy(self, tool_name, weight=1.0):
+            seen.append((tool_name, weight))
+            return real(self, tool_name, weight)
+        monkeypatch.setattr(circuit_breaker.CircuitBreaker, "check_and_record", spy)
+        monkeypatch.setitem(tool_zones.TOOL_ZONES, "exec_tool", Zone.EXEC)
+        monkeypatch.setitem(tool_zones.ZONE_ACTIONS, Zone.EXEC, ZoneAction.ALLOW)
+        env["tools"]["exec_tool"] = _Tool("exec_tool")
+        env["tools"]["read_tool"] = _Tool("read_tool")
+        _call("exec_tool")
+        _call("read_tool")
+        assert seen == [("exec_tool", 3.0), ("read_tool", 1.0)]
+
+
+class TestEventLoopNotBlocked:
+    def test_slow_layer_runs_off_loop(self, env, monkeypatch):
+        import time as _time
+        env["tools"]["read_tool"] = _Tool("read_tool")
+        real = gateway._check_tool_zone
+        state = {"n": 0, "stop": False, "during": None}
+
+        def slow(*a):
+            before = state["n"]
+            _time.sleep(0.3)
+            state["during"] = state["n"] - before
+            return real(*a)
+        monkeypatch.setattr(gateway, "_check_tool_zone", slow)
+
+        async def run():
+            async def ticker():
+                while not state["stop"]:
+                    state["n"] += 1
+                    await asyncio.sleep(0.01)
+            t = asyncio.create_task(ticker())
+            resp = await gateway.dispatch_tool(
+                "read_tool", {}, "aeris", "READ",
+                identity_token=agent_identity.issue_identity("aeris"))
+            state["stop"] = True
+            await t
+            return resp
+
+        assert asyncio.run(run()).success is True
+        # The loop kept ticking while the layer slept in its worker thread;
+        # on the event loop this would be 0.
+        assert state["during"] >= 5

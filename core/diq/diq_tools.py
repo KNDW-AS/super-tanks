@@ -149,7 +149,7 @@ class DIQTool(ABC):
         """Agents that may invoke this tool. [] means all.
 
         Enforced by core.gateway (layer 10) for every caller, including
-        system/internal/test. Must return a list/tuple/set of str;
+        system and internal. Must return a list/tuple/set of str;
         anything else makes the gateway deny (fail closed).
         """
         return []

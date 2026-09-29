@@ -1,53 +1,74 @@
-# Super Tanks v3.3.0 — layers 7–10 enforced in the gateway, evidence-integrity hardening
+# Super Tanks v3.3.0
 
-- **Layers 7–10 now enforce in `core.gateway.dispatch_tool`** (previously
-  documented but not present in this repository). New order after the
-  allowlist: allowed_agents (10) → tool zone + GO-Gate (8, 5) → MCP server
-  trust (9) → circuit breaker (7) → execute. New modules
-  `core/security/circuit_breaker.py`, `core/security/tool_zones.py`,
-  `core/security/mcp_security.py`; new audit verdicts `denied_agent`,
-  `denied_zone`, `pending_approval`, `denied_mcp`,
-  `denied_circuit_breaker`. All four fail closed (`denied_subsystem`).
-  GO-Gate is now part of the gateway via `core.ask_admin.gate_tool_call`;
-  a paused call returns `pending_approval` with `approval_request_id` in
-  the response metadata. See `docs/RUNTIME_PIPELINE.md`.
-- **`DIQTool` contract v1.2**: optional `allowed_agents()` (default `[]`
-  = all, same rule as `DIQSkill`) and `mcp_server()` (default `None`).
-  Existing tools work unchanged. **Re-seal after upgrading:**
-  `python -m supertanks seal`.
-- **Behaviour changes for existing users:**
-  - Tools not in the zone map are `UNCATEGORIZED` and pause for GO-Gate
-    on every call. Map your tools with `tool_zones.set_tool_zone(...)`.
-  - Tools in `filesystem_rw`, `network_write`, `exec` and `admin`
-    (e.g. `file_write`, `memory_store`, `shell_exec`, `python_exec`,
-    `code_edit`, `memory_delete`, `propose_code_change`, `password`,
-    `image_generate`, `task_add`, `task_done`) now pause for GO-Gate.
-  - A per-agent circuit breaker (30 weighted calls / 60 s, 300 s
-    lockout) applies to every agent, including `system`, `internal` and
-    `test`. Benchmarks should raise `CircuitBreaker.DEFAULT_MAX_ACTIONS`.
-  - The tool-output injection scan now fails closed: if the ZEF filter
-    cannot be imported or raises, the tool output is withheld instead of
-    being forwarded unscanned.
-- Docs: README layer table corrected (layer 6 "Sandbox" is a static AST
-  scan of code proposals, not Docker isolation), SYSTEM_CARD check list
-  mapped to the 12 layers with symbol references instead of stale line
-  numbers, new `docs/RUNTIME_PIPELINE.md`. 1,543 tests.
+Three groups of changes since v3.2.0. Test suite: 1,576 tests.
 
+## Gateway layers 7–10 now enforce
 
-- **Layers 11 and 12 — Provider Trust Tier + Provider Failover GO-Gate**
-  (`core/security/provider_trust.py`, `core/security/provider_failover.py`,
-  `config/providers.yaml`): every LLM provider is classified LOCAL / TRUSTED /
-  MIXED / OPEN (unknown → OPEN, fail-closed); prompts and system prompts are
-  stripped for the target tier before they leave the process (secrets at
-  tier 2, + PII and configured `pii_terms` at tier 3, + paths and device ids
-  at tier 4); every provider call is audited with metadata only. Moving an
-  agent to a less-trusted provider requires a GO-Gate approval through the
-  shared `ApprovalStore`; denied or timed-out approvals queue the message —
-  no silent downgrade. Wired into the Council (`Voice.fallback`,
-  `Council.ask(max_tier=…)`). 35 new tests.
+Previously documented but not present in this repository.
 
-Hardening pass driven by the published 7ASecurity STA-01 threat model
-(Threats 05 and 06); 1,436 tests green at the time.
+- New modules `core/security/circuit_breaker.py`, `core/security/tool_zones.py`,
+  `core/security/mcp_security.py`, wired into `core.gateway.dispatch_tool`.
+  Order after the allowlist: allowed_agents (10) → circuit-breaker
+  pre-check (7, records nothing) → tool zone + GO-Gate (8, 5) → MCP server
+  trust (9) → circuit-breaker record (7) → execute → output scan. See
+  `docs/RUNTIME_PIPELINE.md`.
+- Every check fails closed (`denied_subsystem`). Exceptions from a tool's
+  `validate_access` or `execute`, or from anywhere else in the pipeline,
+  are caught and audited (`denied_subsystem` / `tool_error`) instead of
+  escaping `dispatch_tool`.
+- New audit verdicts: `denied_agent`, `denied_zone`, `pending_approval`,
+  `denied_mcp`, `denied_circuit_breaker`, `tool_error`.
+- GO-Gate is part of the gateway via `core.ask_admin.gate_tool_call`. A
+  paused call returns `pending_approval` with `approval_request_id`; it is
+  not resumed automatically — re-issue the identical call after approval
+  (an approval covers that call for 1 h; a human deny blocks it for 1 h).
+- `DIQTool` contract v1.2: optional `allowed_agents()` (default `[]` = all)
+  and `mcp_server()` (default `None`). Existing tools work unchanged.
+  **Re-seal after upgrading:** `python -m supertanks seal`.
+- SQLite work in the gateway runs in a worker thread
+  (`asyncio.to_thread`), so a busy database no longer blocks the event loop.
+- `ApprovalStore()` now defaults to `<repo>/data/approval_requests.db`
+  (was relative to the working directory); override with
+  `SUPER_TANKS_APPROVAL_DB`.
+
+**Behaviour changes for existing users**
+
+- Tools not in the zone map are `UNCATEGORIZED` and pause for GO-Gate on
+  every call. Map your tools with `tool_zones.set_tool_zone(...)`.
+- These tools now pause for GO-Gate: `home_assistant`, `yale`
+  (physical actuation); `file_write`, `memory_store`,
+  `memory_store_hierarchical`, `memory_tools`, `memory_consolidate`,
+  `shadow_store_propose`; `image_generate`; `shell_exec`, `python_exec`,
+  `code_edit`; `memory_delete`, `propose_code_change`.
+- The agent id `test` is no longer exempt from the per-agent allowlist.
+  Only `system` and `internal` are.
+- A per-agent circuit breaker applies to every agent, including `system`
+  and `internal`: 30 weighted units per 60 s (weight 1 for read/task/comms
+  tools … up to 5 for an unmapped tool), 300 s lockout. Benchmarks should
+  raise `CircuitBreaker.DEFAULT_MAX_ACTIONS`.
+- The tool-output injection scan fails closed: if the ZEF filter cannot
+  run or returns something unexpected, the output is withheld.
+
+## Provider layers 11–12
+
+- **Provider Trust Tier** (`core/security/provider_trust.py`,
+  `config/providers.yaml`): every LLM provider is LOCAL / TRUSTED / MIXED /
+  OPEN (unknown → OPEN). Prompts and system prompts are regex-stripped for
+  the target tier before they leave the process: labelled secrets, Bearer
+  tokens, JWTs and known key formats (`sk-`/`sk-ant-`, `ghp_`/`gho_`/
+  `github_pat_`, `xox?-`, `AKIA`/`ASIA`, `AIza`) from tier 2; PII patterns
+  and configured `pii_terms` from tier 3; paths and device ids at tier 4.
+  Secrets in other, unlabelled formats are not recognised. Every provider
+  call is audited with metadata only.
+- **Provider Failover GO-Gate** (`core/security/provider_failover.py`):
+  moving an agent to a less-trusted provider requires a GO-Gate approval
+  through the shared `ApprovalStore`. If denied or timed out, the message
+  is not sent to that provider and the caller gets an error
+  (`FailoverResult.queued=True`); there is no queue or retry in this
+  repository. Wired into the Council (`Voice.fallback`,
+  `Council.ask(max_tier=…)`).
+
+## Evidence-integrity hardening (7ASecurity STA-01, Threats 05 and 06)
 
 - **Dedicated audit-chain key** (`core/security/audit_key.py`,
   `data/.audit_chain_key` / `SUPER_TANKS_AUDIT_KEY`): chain HMACs no

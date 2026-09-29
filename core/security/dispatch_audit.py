@@ -13,8 +13,8 @@ This module:
   1. Generates a `correlation_id` (UUID) for every dispatch.
   2. Records the dispatch in `data/dispatch_audit.db` (WAL, indexed)
      with: timestamp, correlation_id, agent_id, tool_name,
-     agent_role, verdict (allowed / denied_role / denied_allowlist /
-     denied_identity / denied_subsystem), result_success, error.
+     agent_role, verdict (see record_dispatch for the full list),
+     result_success, error.
   3. Exposes a ContextVar `current_correlation_id` so downstream
      callers (memory_audit.log_access, trust_score.record_event,
      approval store) can read it and include it in their own rows.
@@ -145,7 +145,10 @@ def record_dispatch(
       "denied_circuit_breaker" — agent over its rate budget (L7)
       "denied_subsystem"  — a check raised or its store is unavailable;
                             fail-closed deny
+      "tool_error"        — the tool raised or returned a non-ToolResponse
       "no_wrapper"        — tool not registered; caller falls back
+    Note: this function logs and swallows its own write errors — a
+    failed audit write does not fail the dispatch (fail-open for audit).
     """
     now = datetime.now(timezone.utc).isoformat()
     row = {

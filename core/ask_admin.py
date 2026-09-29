@@ -5,9 +5,13 @@ R5.1 ask_admin: Interactive gatekeeping via Telegram
 - TTL: 300 seconds (5 min)
 - Fail-closed: BLOCK on timeout
 - Deduplication: tool_name + args_hash + user_id
-- Replay-proof: request_id single-use
+- Approval reuse: an APPROVED request authorises the identical call
+  (same tool, user and SHA-256 of the arguments) for 1 hour
+  (find_approved_request); it is not single-use. A DENIED request blocks
+  the identical call for 1 hour when entered via gate_tool_call.
 """
 
+import os
 import uuid
 import hashlib
 import json
@@ -20,6 +24,8 @@ from pathlib import Path
 from core.db.connection import open_db
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "approval_requests.db"
 
 # Default TTL for approval requests. Fail-closed: BLOCK on timeout.
 DEFAULT_APPROVAL_TTL_SECONDS = 300
@@ -74,7 +80,12 @@ class ApprovalRequest:
 class ApprovalStore:
     """SQLite-backed store for approval requests"""
 
-    def __init__(self, db_path: str = "data/approval_requests.db"):
+    def __init__(self, db_path: Optional[str] = None):
+        # Default: <project root>/data/approval_requests.db, independent
+        # of the current working directory. SUPER_TANKS_APPROVAL_DB
+        # overrides it (tests, harnesses, multi-instance deployments).
+        if db_path is None:
+            db_path = os.environ.get("SUPER_TANKS_APPROVAL_DB") or str(DEFAULT_DB_PATH)
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
