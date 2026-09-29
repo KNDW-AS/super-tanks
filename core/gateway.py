@@ -228,15 +228,20 @@ async def _dispatch_inner(
     # step, right before execute, so paused or denied calls cost nothing.
     # Each step returns a denial ToolResponse (already audited) or None.
     # Any exception inside a step is a deny (fail closed).
+    # `approvals` collects GO-Gate approvals used by this dispatch (zone
+    # and provisional-MCP gates share one key, so usually one id); the
+    # last step consumes them atomically — approvals are single-use.
+    approvals: Dict[str, str] = {}
     for layer_name, layer in (
         ("allowed_agents", _check_allowed_agents),
         ("circuit_breaker", _precheck_circuit_breaker),
         ("tool_zone", _check_tool_zone),
         ("mcp_trust", _check_mcp_trust),
         ("circuit_breaker", _record_circuit_breaker),
+        ("go_gate", _consume_approvals),
     ):
         try:
-            denial = await asyncio.to_thread(layer, tool, request, corr_id)
+            denial = await asyncio.to_thread(layer, tool, request, corr_id, approvals)
         except Exception as layer_err:
             logger.error("[gateway] %s check failed for %s/%s: %s corr=%s — DENYING",
                          layer_name, agent_id, tool_name, layer_err, corr_id)
@@ -295,14 +300,20 @@ def _deny(request: ToolRequest, corr_id: str, verdict: str, error: str,
 
 
 def _go_gate(request: ToolRequest, corr_id: str, reason: str,
-             deny_verdict: str) -> Optional[ToolResponse]:
-    """Route a call through GO-Gate (core.ask_admin). None = approved."""
+             deny_verdict: str, approvals: Optional[Dict[str, str]] = None,
+             ) -> Optional[ToolResponse]:
+    """Route a call through GO-Gate (core.ask_admin). None = approved;
+    the approval id is added to `approvals` so the dispatch can consume
+    it right before execute."""
     from core.ask_admin import gate_tool_call
     outcome, req_id, status = gate_tool_call(
         request.tool_name, request.agent_id, dict(request.parameters), reason)
     if outcome == "approved":
         logger.info("[gateway] GO-Gate approved %s for %s (req=%s) corr=%s",
                     request.tool_name, request.agent_id, req_id, corr_id)
+        if approvals is None:
+            raise RuntimeError("GO-Gate approval without a consumption context")
+        approvals.setdefault(req_id, deny_verdict)
         return None
     if outcome == "pending":
         return _deny(
@@ -318,7 +329,8 @@ def _go_gate(request: ToolRequest, corr_id: str, reason: str,
                  f"GO-Gate approval store unavailable ({status}), denying")
 
 
-def _check_allowed_agents(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+def _check_allowed_agents(tool, request: ToolRequest, corr_id: str,
+                          approvals: Optional[Dict[str, str]] = None) -> Optional[ToolResponse]:
     """Layer 10 — per-tool agent scope. [] means all agents."""
     allowed = tool.allowed_agents()
     if not isinstance(allowed, (list, tuple, set, frozenset)) or not all(
@@ -330,7 +342,8 @@ def _check_allowed_agents(tool, request: ToolRequest, corr_id: str) -> Optional[
     return None
 
 
-def _check_tool_zone(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+def _check_tool_zone(tool, request: ToolRequest, corr_id: str,
+                     approvals: Optional[Dict[str, str]] = None) -> Optional[ToolResponse]:
     """Layer 8 — zone policy: allow / GO-Gate / deny."""
     from core.security.tool_zones import ZoneAction, get_zone, zone_action
     zone = get_zone(request.tool_name)
@@ -342,11 +355,12 @@ def _check_tool_zone(tool, request: ToolRequest, corr_id: str) -> Optional[ToolR
                      f"Tool '{request.tool_name}' is in zone '{zone.value}', which is denied")
     if action is ZoneAction.GO_GATE:
         return _go_gate(request, corr_id, f"zone '{zone.value}' requires approval",
-                        "denied_zone")
+                        "denied_zone", approvals)
     raise ValueError(f"unknown zone action {action!r}")
 
 
-def _check_mcp_trust(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+def _check_mcp_trust(tool, request: ToolRequest, corr_id: str,
+                     approvals: Optional[Dict[str, str]] = None) -> Optional[ToolResponse]:
     """Layer 9 — MCP server trust, only for tools that declare a server."""
     server = tool.mcp_server()
     if server is None:
@@ -360,11 +374,13 @@ def _check_mcp_trust(tool, request: ToolRequest, corr_id: str) -> Optional[ToolR
     if decision is MCPDecision.ALLOW:
         return None
     if decision is MCPDecision.GO_GATE:
-        return _go_gate(request, corr_id, f"MCP server '{server}': {reason}", "denied_mcp")
+        return _go_gate(request, corr_id, f"MCP server '{server}': {reason}", "denied_mcp",
+                        approvals)
     return _deny(request, corr_id, "denied_mcp", f"MCP server '{server}' blocked: {reason}")
 
 
-def _precheck_circuit_breaker(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+def _precheck_circuit_breaker(tool, request: ToolRequest, corr_id: str,
+                              approvals: Optional[Dict[str, str]] = None) -> Optional[ToolResponse]:
     """Layer 7 pre-check (before GO-Gate): deny if the agent is locked
     out or this call would exceed its budget. Records no usage."""
     from core.security.circuit_breaker import CircuitBreakerError, get_breaker
@@ -378,7 +394,8 @@ def _precheck_circuit_breaker(tool, request: ToolRequest, corr_id: str) -> Optio
     return None
 
 
-def _record_circuit_breaker(tool, request: ToolRequest, corr_id: str) -> Optional[ToolResponse]:
+def _record_circuit_breaker(tool, request: ToolRequest, corr_id: str,
+                            approvals: Optional[Dict[str, str]] = None) -> Optional[ToolResponse]:
     """Layer 7, last step before execute: atomic check-and-record. Trips
     the lockout if this call would exceed the budget."""
     from core.security.circuit_breaker import CircuitBreakerError, get_breaker
@@ -389,6 +406,27 @@ def _record_circuit_breaker(tool, request: ToolRequest, corr_id: str) -> Optiona
     except CircuitBreakerError as cb_err:
         return _deny(request, corr_id, "denied_circuit_breaker", str(cb_err),
                      metadata={"locked_until": cb_err.locked_until})
+    return None
+
+
+def _consume_approvals(tool, request: ToolRequest, corr_id: str,
+                       approvals: Optional[Dict[str, str]] = None) -> Optional[ToolResponse]:
+    """Last step before execute: consume every GO-Gate approval this
+    dispatch relied on. Atomic in the store, so of two concurrent
+    re-issues of one approved call only one executes; the other is
+    denied and must ask again."""
+    if not approvals:
+        return None
+    from core.ask_admin import get_approval_store
+    store = get_approval_store()
+    for req_id, verdict in approvals.items():
+        if not store.consume_approval(req_id):
+            return _deny(
+                request, corr_id, verdict,
+                f"Approval {req_id} was already used (approvals are single-use); "
+                f"re-issue the call to request a new approval",
+                metadata={"approval_request_id": req_id},
+            )
     return None
 
 

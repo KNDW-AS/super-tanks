@@ -277,13 +277,18 @@ def scan_message(message: str, source: str = "unknown") -> FilterResult:
 
 
 def _notify_william(source: str, result: FilterResult) -> None:
-    """Send a Telegram alert to William when a message is blocked."""
+    """Optional admin alert on a BLOCK (Telegram, if configured).
+
+    The block itself is already logged by scan_message. With no notifier
+    configured (the default in the open-source edition) this is a quiet
+    no-op at DEBUG level.
+    """
     try:
         import requests as _req
         token = os.getenv("AERIS_GOGATE_TELEGRAM_TOKEN")
         chat_id = int(os.getenv("AERIS_ADMIN_CHAT_ID", "0"))
         if not token:
-            logger.warning("[ZEF] No AERIS_GOGATE_TELEGRAM_TOKEN — cannot notify admin")
+            logger.debug("[ZEF] no admin notifier configured; block recorded in the log only")
             return
         text = (
             f"🛡️ *ZEF: Prompt Injection Blocked*\n\n"

@@ -5,10 +5,12 @@ R5.1 ask_admin: Interactive gatekeeping via Telegram
 - TTL: 300 seconds (5 min)
 - Fail-closed: BLOCK on timeout
 - Deduplication: tool_name + args_hash + user_id
-- Approval reuse: an APPROVED request authorises the identical call
-  (same tool, user and SHA-256 of the arguments) for 1 hour
-  (find_approved_request); it is not single-use. A DENIED request blocks
-  the identical call for 1 hour when entered via gate_tool_call.
+- Approvals are single-use: an APPROVED request authorises ONE execution
+  of the identical call (same tool, user and SHA-256 of the arguments),
+  which must happen within 1 hour of the approval. The gateway consumes
+  it atomically (consume_approval) right before the call executes, so
+  two concurrent re-issues cannot both run. A DENIED request blocks the
+  identical call for 1 hour when entered via gate_tool_call.
 """
 
 import os
@@ -55,6 +57,7 @@ class ApprovalRequest:
     resolved_at: Optional[float] = None
     resolved_by: Optional[str] = None
     raw_params: Optional[str] = None  # JSON-serialized raw tool parameters
+    consumed_at: Optional[float] = None  # set when the approved call executed
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for storage"""
@@ -73,7 +76,10 @@ class ApprovalRequest:
         return time.time() > self.expires_at
 
     def time_remaining(self) -> int:
-        """Get seconds remaining until expiry"""
+        """Seconds until a PENDING request expires; 0 once it is resolved
+        (approved, denied, expired) — nothing is waiting any more."""
+        if self.status is not ApprovalStatus.PENDING:
+            return 0
         remaining = int(self.expires_at - time.time())
         return max(0, remaining)
 
@@ -130,7 +136,8 @@ class ApprovalStore:
                     expires_at REAL NOT NULL,
                     resolved_at REAL,
                     resolved_by TEXT,
-                    raw_params TEXT DEFAULT '{}'
+                    raw_params TEXT DEFAULT '{}',
+                    consumed_at REAL
                 )
             """)
 
@@ -140,6 +147,13 @@ class ApprovalStore:
             except Exception:
                 conn.execute("ALTER TABLE approval_requests ADD COLUMN raw_params TEXT DEFAULT '{}'")
                 logger.info("[ASK_ADMIN] Migrated: added raw_params column")
+
+            # Migration: single-use approvals (consumed_at)
+            try:
+                conn.execute("SELECT consumed_at FROM approval_requests LIMIT 0")
+            except Exception:
+                conn.execute("ALTER TABLE approval_requests ADD COLUMN consumed_at REAL")
+                logger.info("[ASK_ADMIN] Migrated: added consumed_at column")
 
             # Index for fast lookups
             conn.execute("""
@@ -346,9 +360,9 @@ class ApprovalStore:
         max_age_seconds: int = 3600  # 1 hour default
     ) -> Optional[ApprovalRequest]:
         """
-        Find recently approved request for same tool/args/user.
-
-        This allows re-using approvals within a time window.
+        Find an approved, NOT yet consumed request for the same
+        tool/args/user, approved within the window. An approval is
+        single-use: once consume_approval() has run it is not returned.
         """
 
         # Hash args same way as create
@@ -361,7 +375,7 @@ class ApprovalStore:
             row = conn.execute("""
                 SELECT * FROM approval_requests
                 WHERE tool_name = ? AND user_id = ? AND args_hash = ?
-                AND status = ? AND resolved_at > ?
+                AND status = ? AND resolved_at > ? AND consumed_at IS NULL
                 ORDER BY resolved_at DESC LIMIT 1
             """, (tool_name, user_id, args_hash,
                   ApprovalStatus.APPROVED.value, cutoff_time)).fetchone()
@@ -369,6 +383,43 @@ class ApprovalStore:
             if row:
                 return self._row_to_request(row)
         return None
+
+    def consume_approval(self, request_id: str, max_age_seconds: int = 3600) -> bool:
+        """Mark an approval as used, atomically. True for exactly one caller.
+
+        A single conditional UPDATE under BEGIN IMMEDIATE: of two
+        concurrent re-issues of the same approved call, only one sees
+        rowcount 1 and may execute. The chained evidence row commits in
+        the same transaction.
+        """
+        import sqlite3
+
+        now = time.time()
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE approval_requests SET consumed_at=? "
+                "WHERE request_id=? AND status=? AND consumed_at IS NULL "
+                "AND resolved_at > ?",
+                (now, request_id, ApprovalStatus.APPROVED.value,
+                 now - max_age_seconds),
+            )
+            if cur.rowcount != 1:
+                conn.commit()
+                return False
+            self._log_event(conn, request_id, "consumed", actor="gateway")
+            conn.commit()
+            return True
+        except sqlite3.OperationalError as e:
+            logger.error(f"[ASK_ADMIN] consume_approval failed for {request_id}: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                logger.debug("Suppressed exception (non-critical path)", exc_info=True)
+            return False
+        finally:
+            conn.close()
 
     def find_denied_request(
         self,
@@ -547,6 +598,7 @@ class ApprovalStore:
             resolved_at=row[9],
             resolved_by=row[10],
             raw_params=row[11] if len(row) > 11 else '{}',
+            consumed_at=row[12] if len(row) > 12 else None,
         )
 
 
@@ -673,7 +725,8 @@ def get_request_status(request_id: str) -> Optional[Dict[str, Any]]:
         'created_at': request.created_at,
         'expires_at': request.expires_at,
         'time_remaining': request.time_remaining(),
-        'is_expired': request.is_expired()
+        'is_expired': request.is_expired(),
+        'consumed_at': request.consumed_at,
     }
 
     # If approved, include receipt info
@@ -693,7 +746,8 @@ def get_approval_receipt(request_id: str) -> Optional[Dict[str, Any]]:
     """
     Get a valid approval receipt for execution.
 
-    Returns receipt only if request is APPROVED and not expired.
+    Returns receipt only if request is APPROVED, not expired and not yet
+    consumed (approvals are single-use).
     """
     status = get_request_status(request_id)
 
@@ -704,6 +758,9 @@ def get_approval_receipt(request_id: str) -> Optional[Dict[str, Any]]:
         return None
 
     if status.get('is_expired'):
+        return None
+
+    if status.get('consumed_at'):
         return None
 
     return status.get('receipt')

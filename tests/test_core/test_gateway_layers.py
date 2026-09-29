@@ -504,3 +504,86 @@ class TestEventLoopNotBlocked:
         # The loop kept ticking while the layer slept in its worker thread;
         # on the event loop this would be 0.
         assert state["during"] >= 5
+
+
+# ── Single-use approvals ────────────────────────────────────────────────────
+
+class TestSingleUseApprovals:
+    def test_approved_call_runs_once(self, env):
+        env["tools"]["write_tool"] = t = _Tool("write_tool")
+        rid = _call("write_tool", params={"p": 1}).metadata["approval_request_id"]
+        env["store"].approve_request(rid, "human")
+        assert _call("write_tool", params={"p": 1}).success is True
+        again = _call("write_tool", params={"p": 1})
+        assert again.success is False and len(t.calls) == 1
+        assert again.metadata["approval_request_id"] != rid      # a fresh request
+        assert _verdicts(env["audit"]) == ["pending_approval", "allowed", "pending_approval"]
+        assert env["store"].get_request(rid).consumed_at is not None
+
+    def test_concurrent_reissues_execute_once(self, env):
+        env["tools"]["write_tool"] = t = _Tool("write_tool")
+        rid = _call("write_tool", params={"p": 2}).metadata["approval_request_id"]
+        env["store"].approve_request(rid, "human")
+
+        async def both():
+            tok = agent_identity.issue_identity("aeris")
+            return await asyncio.gather(*[
+                gateway.dispatch_tool("write_tool", {"p": 2}, "aeris", "READ",
+                                      identity_token=tok) for _ in range(5)])
+        results = asyncio.run(both())
+        assert sum(r.success for r in results) == 1
+        assert len(t.calls) == 1
+
+    def test_ten_threads_reissue_execute_once(self, env):
+        import threading
+        env["tools"]["write_tool"] = t = _Tool("write_tool")
+        rid = _call("write_tool", params={"p": 10}).metadata["approval_request_id"]
+        env["store"].approve_request(rid, "human")
+        results = []
+        barrier = threading.Barrier(10)
+
+        def worker():
+            barrier.wait()
+            results.append(_call("write_tool", params={"p": 10}))
+        threads = [threading.Thread(target=worker) for _ in range(10)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert len(results) == 10
+        assert sum(r.success for r in results) == 1
+        assert len(t.calls) == 1
+
+    def test_lost_race_is_denied_with_gate_verdict(self, env, monkeypatch):
+        env["tools"]["write_tool"] = t = _Tool("write_tool")
+        rid = _call("write_tool", params={"p": 3}).metadata["approval_request_id"]
+        env["store"].approve_request(rid, "human")
+        monkeypatch.setattr(env["store"], "consume_approval", lambda *_a, **_k: False)
+        resp = _call("write_tool", params={"p": 3})
+        assert resp.success is False and t.calls == []
+        assert "already used" in resp.error
+        assert _verdicts(env["audit"])[-1] == "denied_zone"
+
+    def test_one_approval_covers_zone_and_mcp_then_consumed_once(self, env):
+        import sqlite3
+        _server(TrustLevel.PROVISIONAL)
+        env["tools"]["write_tool"] = t = _Tool("write_tool", server="srv")
+        rid = _call("write_tool").metadata["approval_request_id"]
+        env["store"].approve_request(rid, "human")
+        assert _call("write_tool").success is True
+        assert len(t.calls) == 1
+        conn = sqlite3.connect(env["store"].db_path)
+        events = [e for (e,) in conn.execute(
+            "SELECT event FROM approval_events WHERE request_id=?", (rid,))]
+        conn.close()
+        assert events.count("consumed") == 1
+        assert _call("write_tool").success is False   # consumed → asks again
+
+    def test_deny_stays_sticky_after_single_use(self, env):
+        env["tools"]["write_tool"] = t = _Tool("write_tool")
+        rid = _call("write_tool", params={"p": 4}).metadata["approval_request_id"]
+        env["store"].deny_request(rid, "human")
+        for _ in range(3):
+            assert _call("write_tool", params={"p": 4}).success is False
+        assert t.calls == []
+        assert set(_verdicts(env["audit"])[1:]) == {"denied_zone"}

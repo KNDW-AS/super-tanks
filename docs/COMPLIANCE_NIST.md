@@ -168,7 +168,7 @@ are in development as of 2026.
 | Agent identity & authentication | HMAC agent identity `core/security/agent_identity.py`; Soul Files (2) SHA256-sealed identity → `SAFE_MODE` on mismatch | Strong |
 | Least-privilege / scoped autonomy | Default-deny allowlists (4); `allowed_agents` (10); Tool Zone Isolation (8); 5-level user access | Strong |
 | Bounded tool use / frozen action surface | DIQ declarative contracts (3) `core/diq/`; Tool Zone Isolation (8) | Strong |
-| Human oversight of consequential actions | GO-Gate (5) human-in-the-loop in the gateway; approval bound to tool + agent + argument hash and reusable for 1 h for that identical call; 5-min TTL on pending requests | Strong |
+| Human oversight of consequential actions | GO-Gate (5) human-in-the-loop in the gateway; approval bound to tool + agent + argument hash and single-use (one execution, within 1 h); 5-min TTL on pending requests | Strong |
 | Indirect / tool-mediated prompt injection | ZEF Firewall (1) + tool-output re-scan and provenance tagging (`gateway._scan_response_for_injection`) | Strong |
 | Inter-agent (A2A) communication integrity | A2A signature verify `core/a2a/escalation_rules.py` (`verify_or_drop`) → `agent_identity.verify_a2a_message`; unsigned/tampered messages dropped | Strong |
 | Containment of untrusted execution | Sandbox (6) AST scanner `core/zeph_quarantine_ast.py` screens agent-generated code before approval; once approved, code runs in-process with the application's privileges | **Partial** — AST is preventative-only. A runtime sandbox wrapping approved code *and* the pip upgrade path is the top open item (R-04, [RISK_REGISTER.md](RISK_REGISTER.md)) |

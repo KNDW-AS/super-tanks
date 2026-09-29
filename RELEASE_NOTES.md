@@ -1,6 +1,6 @@
 # Super Tanks v3.3.0
 
-Three groups of changes since v3.2.0. Test suite: 1,579 tests (1 skipped when agentdojo is not installed).
+Three groups of changes since v3.2.0. Test suite: 1,604 tests collected (2 doc examples skipped without agentdojo / a live Ollama server).
 
 ## Gateway layers 7–10 now enforce
 
@@ -20,8 +20,11 @@ Previously documented but not present in this repository.
   `denied_mcp`, `denied_circuit_breaker`, `tool_error`.
 - GO-Gate is part of the gateway via `core.ask_admin.gate_tool_call`. A
   paused call returns `pending_approval` with `approval_request_id`; it is
-  not resumed automatically — re-issue the identical call after approval
-  (an approval covers that call for 1 h; a human deny blocks it for 1 h).
+  not resumed automatically — re-issue the identical call after approval.
+  Approvals are single-use: one approval lets the identical call (same
+  tool, agent, arguments) execute once, within 1 h; it is consumed
+  atomically right before execution, so concurrent re-issues cannot both
+  run. A human deny blocks the identical call for 1 h.
 - `DIQTool` contract v1.2: optional `allowed_agents()` (default `[]` = all)
   and `mcp_server()` (default `None`). Existing tools work unchanged.
   **Re-seal after upgrading:** `python -m supertanks seal`.
@@ -34,10 +37,9 @@ Previously documented but not present in this repository.
 **Behaviour changes for existing users**
 
 - Tools not in the zone map are `UNCATEGORIZED` and pause for GO-Gate on
-  every call (an approval covers the identical call — same tool, agent and
-  arguments — for 1 h). Map your tools with `tool_zones.set_tool_zone(...)`.
+  every call (one approval = one execution of the identical call). Map your tools with `tool_zones.set_tool_zone(...)`.
 - These tools now pause for GO-Gate on every call, reads included (the zone
-  action is per tool name; an approval covers the identical call for 1 h):
+  action is per tool name; one approval = one execution):
   `home_assistant`, `yale`
   (physical actuation); `file_write`, `memory_store`,
   `memory_store_hierarchical`, `memory_tools`, `memory_consolidate`,
@@ -52,6 +54,26 @@ Previously documented but not present in this repository.
   budget. Benchmarks should raise `CircuitBreaker.DEFAULT_MAX_ACTIONS`.
 - The tool-output injection scan fails closed: if the ZEF filter cannot
   run or returns something unexpected, the output is withheld.
+- **GO-Gate approvals are single-use.** Previously an approved call could be
+  re-issued any number of times for 1 h. Now the approval is consumed
+  atomically when the call executes (`ApprovalStore.consume_approval`,
+  new `consumed_at` column, migrated automatically); a further identical
+  call asks again. `get_approval_receipt` returns nothing for a consumed
+  approval, and `get_request_status` reports `time_remaining` 0 for
+  resolved requests.
+- **No default admin account.** Boot used to create a Level-5 user
+  `Admin` with PIN `0000` when none existed (present since v3.1). It now
+  creates nothing and logs how to create one:
+  `python -m supertanks create-admin --name <name>` (PIN ≥ 6 characters,
+  trivial PINs refused; `SUPER_TANKS_ADMIN_PIN` for non-interactive use).
+  Existing databases are not changed — if yours has `Admin`/`0000`,
+  change or delete it.
+- Quieter open-source boot and filter: no Telegram-notifier warning on
+  every ZEF block when no notifier is configured (DEBUG now), and a
+  missing `tools/` package is logged at INFO instead of as a boot error.
+- `python -m supertanks demo` now runs through `dispatch_tool` (zone,
+  GO-Gate, single-use approval, sticky deny, audit rows), not the
+  approval functions directly.
 
 ## Provider layers 11–12
 

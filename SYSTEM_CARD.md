@@ -166,14 +166,17 @@ quarantine and the agent loop (the loop is not in this repository).
    deny; unknown tools require GO-Gate. GO-Gate returns
    `pending_approval` with the approval request id; the call is not
    resumed automatically — after a human approves in `ApprovalStore`,
-   the caller re-issues the identical call (within 1 h). A human deny
-   of the identical call stays a deny for 1 h
+   the caller re-issues the identical call (within 1 h). Approvals are
+   single-use: consumed atomically right before the call executes, so
+   one approval = one execution. A human deny of the identical call
+   stays a deny for 1 h
    (`core/security/tool_zones.py`, `core/ask_admin.py::gate_tool_call`).
    L8 + L5.
 7. **MCP server trust** — only for tools whose `mcp_server()` is set:
    verified → allow, provisional → GO-Gate, quarantined/unknown → deny
    (`core/security/mcp_security.py`). One approval covers both the zone
-   gate and the provisional-MCP gate (same tool + agent + argument
+   gate and the provisional-MCP gate in the same dispatch and is
+   consumed once (same tool + agent + argument
    key). L9.
 8. **Gateway chokepoint + output scan** — `DIQTool.execute()` refuses
    to run outside the gateway ContextVar (limits above), and tool output
@@ -271,11 +274,12 @@ outside this open-source release and is responsible for calling
   evaluations before integration; it relies on the upstream provider's
   refusal training and on the layered defenses above to contain
   misbehaviour.
-- **GO-Gate approval reuse.** An approval covers the identical call
-  (same tool, agent and SHA-256 of the arguments) for one hour
-  (`ApprovalStore.find_approved_request`), and a human deny blocks the
-  identical call for one hour. Within that window a repeated identical
-  call is not re-asked.
+- **GO-Gate approval scope.** An approval is bound to the identical call
+  (same tool, agent and SHA-256 of the arguments) and is single-use: it
+  lets that call execute once, within one hour, and is consumed
+  atomically (`ApprovalStore.consume_approval`). A human deny blocks the
+  identical call for one hour. The approval does not bind the asserted
+  `agent_role` or the conversation.
 - **MCP servers themselves.** Layer 9 is a trust gate on dispatch. It
   does not scan, sign-check or sandbox an MCP server; trust levels are
   set by a human.
@@ -284,7 +288,7 @@ outside this open-source release and is responsible for calling
 
 ## Validation
 
-- Test surface: 1,579 pytest tests. The 70% coverage floor on `core/`
+- Test surface: 1,604 tests collected by pytest (2 skipped without agentdojo / a live Ollama server). The 70% coverage floor on `core/`
   and `scripts/` is enforced by the `pytest` job in
   `.github/workflows/tests.yml` (`--cov-fail-under=70`), not by
   `pytest.ini`; the cross-platform `quickstart` jobs run with `--no-cov`.

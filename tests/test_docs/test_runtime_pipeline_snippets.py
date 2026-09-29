@@ -3,7 +3,9 @@
 Each block runs in its own subprocess from the repo root. A short
 prelude (not part of the doc) only redirects the SQLite stores and keys
 to a temp dir so the test never writes to data/. Blocks whose first line
-is `# requires: <module>` are skipped when that module is missing.
+is `# requires: <module>` are skipped when that module is missing, and
+blocks starting with `# not run by the doc test` (they need a live
+service) are always skipped.
 When a block is followed by an "Output" text block, stdout must match it
 (UUIDs masked).
 """
@@ -71,6 +73,8 @@ def test_doc_has_python_blocks():
 def test_block_runs(index, tmp_path):
     code, expected = BLOCKS[index]
     first = code.lstrip().splitlines()[0]
+    if first.startswith("# not run by the doc test"):
+        pytest.skip(first)
     m = re.match(r"#\s*requires:\s*(\w+)", first)
     if m and importlib.util.find_spec(m.group(1)) is None:
         pytest.skip(f"{m.group(1)} not installed")

@@ -649,28 +649,42 @@ def get_user_audit(limit: int = 50) -> List[Dict]:
         conn.close()
 
 
-# ── Migration: import existing William user ──
+# ── Admin presence ──
 
-def ensure_admin_exists():
-    """Ensure at least one Level 5 user exists. Creates from existing user_auth if needed."""
+# PINs that must never be accepted for an admin account.
+_TRIVIAL_PINS = {"0000", "1111", "1234", "4321", "12345", "123456", "000000", "111111"}
+
+
+def ensure_admin_exists() -> bool:
+    """Return True if at least one Level-5 user exists.
+
+    Never creates an account. Earlier versions auto-provisioned a
+    Level-5 "Admin" with the static PIN 0000 when no admin existed —
+    a known credential on every fresh install. Now the operator creates
+    the first admin explicitly with `python -m supertanks create-admin`.
+    """
     conn = _get_conn()
     try:
         count = conn.execute("SELECT COUNT(*) FROM st_users WHERE level=5").fetchone()[0]
-        if count > 0:
-            return
-
-        # Import from existing user_auth
-        try:
-            from core.user_auth import get_auth
-            auth = get_auth()
-            for name, user in auth.users.items():
-                if user.is_admin:
-                    create_user(name=name, pin="0000", level=5, created_by="system",
-                                telegram_id="" if name == "William" else "")
-                    logger.info("[USER] Migrated admin user: %s", name)
-        except Exception as e:
-            # Fallback: create default admin
-            create_user(name="Admin", pin="0000", level=5, created_by="system")
-            logger.warning("[USER] Created default admin (migration failed: %s)", e)
     finally:
         conn.close()
+    if count > 0:
+        return True
+    logger.warning("[USER] No Level-5 user exists. Create one explicitly: "
+                   "python -m supertanks create-admin --name <name>")
+    return False
+
+
+def create_first_admin(name: str, pin: str) -> Dict:
+    """Create the first Level-5 user with an operator-chosen PIN.
+
+    Refuses if a Level-5 user already exists (use update_user as that
+    admin instead) and refuses short or trivial PINs.
+    """
+    pin = str(pin)
+    if len(pin) < 6 or len(set(pin)) == 1 or pin in _TRIVIAL_PINS:
+        return {"success": False,
+                "error": "PIN must be at least 6 characters and not trivial"}
+    if ensure_admin_exists():
+        return {"success": False, "error": "A Level-5 user already exists"}
+    return create_user(name=name, pin=pin, level=5, created_by="create_first_admin")

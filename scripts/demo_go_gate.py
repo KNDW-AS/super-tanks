@@ -1,79 +1,126 @@
 """
-demo_go_gate.py — runnable GO-Gate walkthrough against a throwaway database.
+demo_go_gate.py — runnable GO-Gate walkthrough through the real gateway.
 
-Shows the real approval flow (core/ask_admin.py): an agent's tool call is
-paused fail-closed, a human approves or denies, and the gate returns a
-signed-off receipt or keeps the call blocked. Nothing here touches data/.
+Every tool call goes through `core.gateway.dispatch_tool` — identity,
+allowlist, zone, GO-Gate, circuit breaker, output scan and audit — exactly
+as an agent's would. The only shortcut is the human: the demo approves or
+denies in the approval store instead of via a chat bot. All state lives in
+a throwaway temp directory; nothing here touches data/.
 
-Run:  python3 scripts/demo_go_gate.py
+Run:  python3 scripts/demo_go_gate.py      (or: python -m supertanks demo)
+      DEMO_FAST=1 skips the pauses.
 """
 
+import asyncio
+import os
 import sys
-import time
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import core.ask_admin as ask_admin
-from core.ask_admin import ApprovalStore, check_tool_permission, get_approval_receipt
+_TMP = Path(tempfile.mkdtemp(prefix="gogate_demo_"))
+os.environ["SUPER_TANKS_APPROVAL_DB"] = str(_TMP / "approvals.db")
+os.environ.setdefault("SUPER_TANKS_IDENTITY_KEY", "demo-identity-key")
+os.environ.setdefault("SUPER_TANKS_AUDIT_KEY", "demo-audit-key")
 
-# Isolated store — the demo never touches the production database.
-ask_admin._approval_store = ApprovalStore(
-    db_path=str(Path(tempfile.mkdtemp(prefix="gogate_demo_")) / "demo.db")
-)
+import logging  # noqa: E402
 
-POLICY = {
-    "tools": {
-        "send_email":   {"permission": "ask_admin", "description": "Send e-mail on the user's behalf"},
-        "delete_files": {"permission": "ask_admin", "description": "Delete files from disk"},
-    }
-}
+logging.disable(logging.WARNING)   # the demo prints its own narration
 
+import core.ask_admin as ask_admin  # noqa: E402
+from core.diq.diq_registry import register_tool  # noqa: E402
+from core.diq.diq_tools import DIQTool, ToolResponse  # noqa: E402
+from core.gateway import dispatch_tool  # noqa: E402
+from core.security import circuit_breaker, dispatch_audit, mcp_security  # noqa: E402
+from core.security.agent_identity import issue_identity  # noqa: E402
+from core.security.tool_allowlists import AGENT_ALLOWLISTS  # noqa: E402
+from core.security.tool_zones import Zone, set_tool_zone  # noqa: E402
+
+dispatch_audit.DB_PATH = _TMP / "dispatch.db"
+dispatch_audit._initialised = False
+circuit_breaker.DB_PATH = _TMP / "cb.db"
+mcp_security.DB_PATH = _TMP / "mcp.db"
+
+FAST = bool(os.environ.get("DEMO_FAST"))
 CYAN, GREEN, RED, DIM, BOLD, RESET = "\033[36m", "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 
 
 def say(line: str = "", delay: float = 0.9) -> None:
     print(line, flush=True)
-    time.sleep(delay)
+    if not FAST:
+        time.sleep(delay)
 
 
 def human(cmd: str) -> None:
-    print(f"{BOLD}[human]{RESET} ", end="", flush=True)
-    for ch in cmd:
-        print(ch, end="", flush=True)
-        time.sleep(0.04)
-    print(flush=True)
-    time.sleep(0.7)
+    print(f"{BOLD}[human]{RESET} {cmd}", flush=True)
+    if not FAST:
+        time.sleep(0.8)
 
 
-say(f"{BOLD}── Super Tanks · GO-Gate: human approval for agent tool calls ──{RESET}", 1.2)
-say(f"{DIM}   policy: send_email + delete_files require ask_admin (fail-closed){RESET}", 1.4)
+class DemoTool(DIQTool):
+    def __init__(self, name: str):
+        self._n = name
+
+    def name(self): return self._n
+    def description(self): return self._n
+    def parameters_schema(self): return {}
+    def required_role(self): return "WRITE"
+
+    async def _execute_impl(self, request):
+        return ToolResponse(success=True, result=f"{self._n} done: {request.parameters}")
+
+
+AGENT = "demo_agent"
+for tool, zone in (("send_email", Zone.NETWORK_WRITE), ("delete_files", Zone.ADMIN)):
+    register_tool(DemoTool(tool))
+    set_tool_zone(tool, zone)
+AGENT_ALLOWLISTS[AGENT] = ["send_email", "delete_files"]
+TOKEN = issue_identity(AGENT)
+
+
+def call(tool: str, params: dict):
+    return asyncio.run(dispatch_tool(tool, params, AGENT, "WRITE", identity_token=TOKEN))
+
+
+def show(resp) -> str:
+    if resp.success:
+        return f"{GREEN}EXECUTED{RESET} → {resp.result}"
+    req = (resp.metadata or {}).get("approval_request_id")
+    tag = f" [request {req[:8]}]" if req and "Paused" in (resp.error or "") else ""
+    return f"{RED}BLOCKED{RESET} — {resp.error.split(';')[0]}{tag}"
+
+
+store = ask_admin.get_approval_store()
+say(f"{BOLD}── Super Tanks · GO-Gate through dispatch_tool ──{RESET}", 1.2)
+say(f"{DIM}   zones: send_email = network_write, delete_files = admin → both need a human GO{RESET}", 1.2)
 say()
 
-# 1) Agent proposes a tool call → gate pauses it
-say(f"[agent] {CYAN}cody{RESET} calls send_email(to='supplier@example.com', subject='PO-4711')", 1.0)
-ok, req_id, status = check_tool_permission(
-    "send_email", "cody", {"to": "supplier@example.com", "subject": "PO-4711"}, POLICY
-)
-say(f"[gate ] {status} — request {BOLD}{req_id[:8]}{RESET}  (TTL 300s)")
-say(f"[gate ] tool call is {RED}BLOCKED{RESET} until a human decides", 1.3)
-say()
-
-# 2) Human approves → receipt, call proceeds
+email = {"to": "supplier@example.com", "subject": "PO-4711"}
+say(f"[agent] {CYAN}{AGENT}{RESET} calls send_email({email})")
+r = call("send_email", email)
+say(f"[gate ] {show(r)}", 1.2)
+req_id = r.metadata["approval_request_id"]
 human(f"/approve {req_id[:8]}")
-ask_admin.get_approval_store().approve_request(req_id, admin_id="william")
-receipt = get_approval_receipt(req_id)
-say(f"[gate ] {GREEN}APPROVED{RESET} by {receipt['approved_by']} · receipt {receipt['request_id'][:8]} logged")
-say(f"[agent] send_email executed {GREEN}✓{RESET}", 1.6)
+store.approve_request(req_id, admin_id="human")
+say("[agent] re-issues the identical call (paused calls are not resumed)")
+say(f"[gate ] {show(call('send_email', email))}", 1.2)
+say("[agent] tries the same call once more")
+say(f"[gate ] {show(call('send_email', email))}  {DIM}(approvals are single-use){RESET}", 1.4)
 say()
 
-# 3) Second call → human denies → never executed
-say(f"[agent] {CYAN}cody{RESET} calls delete_files(path='/backups')", 1.0)
-ok, req_id, status = check_tool_permission("delete_files", "cody", {"path": "/backups"}, POLICY)
-say(f"[gate ] {status} — request {BOLD}{req_id[:8]}{RESET}")
-human(f"/deny {req_id[:8]}")
-ask_admin.get_approval_store().deny_request(req_id, admin_id="william")
-say(f"[gate ] {RED}DENIED{RESET} by william — the call never executed · audit trail kept", 1.6)
+wipe = {"path": "/backups"}
+say(f"[agent] {CYAN}{AGENT}{RESET} calls delete_files({wipe})")
+r = call("delete_files", wipe)
+say(f"[gate ] {show(r)}")
+human(f"/deny {r.metadata['approval_request_id'][:8]}")
+store.deny_request(r.metadata["approval_request_id"], admin_id="human")
+say("[agent] re-issues it")
+say(f"[gate ] {show(call('delete_files', wipe))}  {DIM}(a deny sticks for 1 h){RESET}", 1.4)
 say()
-say(f"{DIM}No answer within the TTL? The request expires and the call stays blocked.{RESET}", 2.2)
+
+say(f"{DIM}Audit trail (dispatch_log):{RESET}", 0.3)
+for row in reversed(dispatch_audit.get_dispatch_history(agent_id=AGENT)):
+    say(f"{DIM}  {row['verdict']:<18} {row['tool_name']}{RESET}", 0.1)
+say(f"{DIM}No answer within the TTL (300 s)? The request expires and the call stays blocked.{RESET}", 0.5)

@@ -10,7 +10,10 @@ Source: `core/gateway.py` (`dispatch_tool` → `_dispatch_inner`).
 Tests that pin this behaviour: `tests/test_core/test_gateway.py`,
 `tests/test_core/test_gateway_layers.py`. Every `python` block below is
 executed by `tests/test_docs/test_runtime_pipeline_snippets.py` (the
-AgentDojo block only when `agentdojo` is installed).
+AgentDojo block only when `agentdojo` is installed), and its stdout is
+compared with the "Output" block that follows it (UUIDs masked). The
+Output blocks show stdout only; log lines (WARNING and above go to
+stderr by default) are omitted.
 
 ## Dispatch order
 
@@ -51,6 +54,9 @@ dispatch_tool(tool_name, params, agent_id, agent_role, identity_token=...)
 [9] breaker (L7)     check_and_record(tool, weight)             over budget → denied_circuit_breaker
  │   record          (atomic; only calls that reach here count)
  ▼
+[9b] GO-Gate         consume every approval used in [7]/[8]     already used → gate's deny verdict
+ │   consume         (atomic; approvals are single-use)
+ ▼
 [10] execute         tool.execute(request)                      raised / wrong type → tool_error
  ▼
 [11] output scan     ZEF regex filter on the result (L1)
@@ -61,11 +67,11 @@ dispatch_tool(tool_name, params, agent_id, agent_role, identity_token=...)
 record_dispatch(verdict="allowed", result_success=...) → return ToolResponse
 ```
 
-- Steps [5]–[9] run in a worker thread (`asyncio.to_thread`), as do
+- Steps [5]–[9b] run in a worker thread (`asyncio.to_thread`), as do
   all audit writes, so a busy SQLite database does not block the event
   loop. The tool itself ([10]) runs on the event loop: a tool that
   blocks, blocks the loop.
-- Any exception inside [5]–[9] becomes `denied_subsystem` with the
+- Any exception inside [5]–[9b] becomes `denied_subsystem` with the
   step name in the error. Any exception anywhere else in the pipeline
   is caught by `dispatch_tool` and also recorded as `denied_subsystem`.
   No `Exception` escapes `dispatch_tool`. `BaseException`s that are not
@@ -93,7 +99,8 @@ and write one row to `dispatch_log` with the verdict below.
 | 7 | GO-Gate, human denied | `denied_zone` | `approval_request_id` | no |
 | 8 | MCP quarantined / unknown | `denied_mcp` | – | no |
 | 8 | MCP provisional, human denied | `denied_mcp` | `approval_request_id` | no |
-| 5–9 | step raised / store unavailable | `denied_subsystem` | – | no |
+| 9b | approval already consumed (lost race / replay) | `denied_zone` or `denied_mcp` | `approval_request_id` | no |
+| 5–9b | step raised / store unavailable | `denied_subsystem` | – | no |
 | 10 | tool raised or returned a non-`ToolResponse` | `tool_error` | – | started, failed |
 | 11 | output BLOCK | `allowed` (`result_success=0`) | `indirect_injection`, `matched_patterns` | yes, output dropped |
 | 11 | output WARN | `allowed` | `untrusted_content`, `provenance`, `provenance_warnings` | yes |
@@ -109,7 +116,7 @@ and write one row to `dispatch_log` with the verdict below.
 | allowed_agents | closed | a non-list return value is treated as an error |
 | circuit breaker | closed | DB error → `denied_subsystem` |
 | tool zone | closed | unknown tool → `UNCATEGORIZED` → GO-Gate |
-| GO-Gate store | closed | failed persist → `denied_subsystem` |
+| GO-Gate store | closed | failed persist → `denied_subsystem`; failed consume → deny |
 | MCP trust | closed | DB error → `denied_subsystem`; unknown server → deny |
 | tool execution | closed | exception → `tool_error` |
 | output scan | closed | import error, exception or unexpected verdict → output withheld. Regex/normalisation filter only; the Ollama LLM classifier is not used on tool output (it is used on some input channels, where it fails open — see SECURITY.md) |
@@ -130,13 +137,17 @@ and write one row to `dispatch_log` with the verdict below.
   `system` shares one budget (and `internal` another).
 - **It does not resume paused calls.** After a human approves, the
   caller must re-issue the identical call (same tool, agent and
-  arguments). The approval covers that call for 1 hour; a human deny
-  blocks it for 1 hour. A different argument is a different call and
+  arguments) within 1 hour. **Approvals are single-use:** step [9b]
+  consumes the approval atomically right before execute, so one approval
+  = one execution, and of two concurrent re-issues only one runs (the
+  other is denied with the gate's verdict and must ask again). A human
+  deny blocks the identical call for 1 hour. A different argument is a different call and
   asks again. Pending requests expire after 300 s; an expired request
   cannot be approved, and the next identical call opens a new one.
 - **One approval, both gates.** If a tool is in a GO-Gate zone *and*
-  backed by a provisional MCP server, one approval covers both, because
-  both gates use the same key (tool + agent + argument hash).
+  backed by a provisional MCP server, one approval satisfies both gates
+  in the same dispatch (same key: tool + agent + argument hash) and is
+  consumed once.
 - **It does not consult the mode controller or the trust score**
   (`super_tanks_mode.py`, `trust_score.py`). Those are used by memory
   access control, code quarantine and the agent loop (not in this
@@ -272,8 +283,8 @@ class SendMoney(DIQTool):
         return ToolResponse(success=True, result=f"sent {p['amount']} to {p['to']}")
 
 
-# Throwaway approval store so every run starts clean (an approval is
-# reused for 1 h). Production uses the default <repo>/data store.
+# Throwaway approval store so every run starts clean (a deny sticks for
+# 1 h). Production uses the default <repo>/data store.
 ask_admin._approval_store = ask_admin.ApprovalStore(
     db_path=str(pathlib.Path(tempfile.mkdtemp()) / "approvals.db"))
 
@@ -299,7 +310,13 @@ async def main():
                                  identity_token=token)
     print("2nd:", second.success, "|", second.result, "| metadata:", second.metadata)
 
-    for row in reversed(get_dispatch_history(agent_id="banking_agent", limit=2)):
+    # Approvals are single-use: the same call again needs a new approval.
+    third = await dispatch_tool("send_money", args, "banking_agent", "WRITE",
+                                identity_token=token)
+    print("3rd:", third.success, "| new request:",
+          third.metadata["approval_request_id"] != req_id)
+
+    for row in reversed(get_dispatch_history(agent_id="banking_agent", limit=3)):
         print("audit:", row["verdict"], row["tool_name"],
               "success" if row["result_success"] else "no-exec", "|", row["error"])
 
@@ -307,18 +324,21 @@ async def main():
 asyncio.run(main())
 ```
 
-Output (request id varies):
+Output (stdout; request ids vary; log lines go to stderr and are not shown):
 
 ```text
-1st: False | Paused for human approval (zone 'network_write' requires approval); request e011234b-bfe6-4956-92d7-e3bb7df3210d
+1st: False | Paused for human approval (zone 'network_write' requires approval); request 69599cca-fb5f-495c-85f7-d1cda2fc1998
 2nd: True | sent 10 to alice | metadata: None
-audit: pending_approval send_money no-exec | Paused for human approval (zone 'network_write' requires approval); request e011234b-bfe6-4956-92d7-e3bb7df3210d
+3rd: False | new request: True
+audit: pending_approval send_money no-exec | Paused for human approval (zone 'network_write' requires approval); request 69599cca-fb5f-495c-85f7-d1cda2fc1998
 audit: allowed send_money success | None
+audit: pending_approval send_money no-exec | Paused for human approval (zone 'network_write' requires approval); request d312868a-544c-4adf-ac8b-24ac6821b9cc
 ```
 
 `metadata: None` on the second call means the output scan found nothing
-(ZEF PASS). The two `dispatch_log` rows share nothing but the tool and
-agent; each call has its own `correlation_id`.
+(ZEF PASS). The third call shows that the approval was consumed: the
+identical call pauses again with a new request. Each `dispatch_log` row
+has its own `correlation_id`.
 
 ### Provider trust (L11) and failover (L12)
 
@@ -351,7 +371,7 @@ down = check_failover("agent", "anthropic", "openrouter")    # tier 2 → 4: GO-
 print(down.approved, down.queued, down.reason)
 ```
 
-Output:
+Output (stdout):
 
 ```text
 2 4 4
@@ -368,15 +388,22 @@ benchmark creates its own `FunctionsRuntime`, so you cannot wrap
 swaps in a runtime whose `run_function` goes through `dispatch_tool`.
 Verified against agentdojo 0.1.35.
 
+A GO-Gate pause is returned to the model as a tool error; nothing waits
+for a human. To measure "with a human in the loop" you need an approver
+and a re-issue of the identical call — `HumanGatewayRuntime` below does
+exactly one approve-or-deny and one re-issue per paused call.
+
 ```python
 # requires: agentdojo
 import asyncio
 import contextvars
+import json
 
 from agentdojo.agent_pipeline import ToolsExecutor
 from agentdojo.functions_runtime import FunctionCall, FunctionsRuntime
 from agentdojo.task_suite.load_suites import get_suite
 
+import core.ask_admin as ask_admin
 from core.diq.diq_registry import register_tool
 from core.diq.diq_tools import DIQTool, ToolResponse
 from core.gateway import dispatch_tool
@@ -420,13 +447,16 @@ class GatewayRuntime(FunctionsRuntime):
         super().__init__(list(inner.functions.values()))
         self._inner, self._token = inner, token
 
-    def run_function(self, env, function, kwargs, raise_on_error=False):
+    def _dispatch(self, env, function, kwargs):
         ctx = _current.set((self._inner, env))
         try:
-            resp = asyncio.run(dispatch_tool(function, dict(kwargs), AGENT, "READ",
+            return asyncio.run(dispatch_tool(function, dict(kwargs), AGENT, "READ",
                                              identity_token=self._token))
         finally:
             _current.reset(ctx)
+
+    def run_function(self, env, function, kwargs, raise_on_error=False):
+        resp = self._dispatch(env, function, kwargs)
         if resp is None:
             return "", f"ToolNotFoundError: {function}"
         if not resp.success:
@@ -434,8 +464,29 @@ class GatewayRuntime(FunctionsRuntime):
         return resp.result, None
 
 
+class HumanGatewayRuntime(GatewayRuntime):
+    """GatewayRuntime plus an approver. On a GO-Gate pause it asks
+    `approver(request)` and, if approved, re-issues the identical call once.
+    Without this, a pause just goes back to the model as a tool error."""
+
+    approver = None   # callable(ApprovalRequest) -> bool; a policy, or a real human
+
+    def run_function(self, env, function, kwargs, raise_on_error=False):
+        resp = self._dispatch(env, function, kwargs)
+        req_id = (resp.metadata or {}).get("approval_request_id") if resp else None
+        if req_id and self.approver and "Paused" in (resp.error or ""):
+            store = ask_admin.get_approval_store()
+            if self.approver(store.get_request(req_id)):
+                store.approve_request(req_id, admin_id="approver")
+            else:
+                store.deny_request(req_id, admin_id="approver")
+        return super().run_function(env, function, kwargs)   # re-issue (or report the pause)
+
+
 class GatewayToolsExecutor(ToolsExecutor):
     """Use instead of ToolsExecutor, e.g. ToolsExecutionLoop([GatewayToolsExecutor(token), llm])."""
+
+    runtime_cls = GatewayRuntime
 
     def __init__(self, token, **kwargs):
         super().__init__(**kwargs)
@@ -443,8 +494,12 @@ class GatewayToolsExecutor(ToolsExecutor):
 
     def query(self, query, runtime, env, messages=[], extra_args={}):
         q, _, env, messages, extra = super().query(
-            query, GatewayRuntime(runtime, self._token), env, messages, extra_args)
+            query, self.runtime_cls(runtime, self._token), env, messages, extra_args)
         return q, runtime, env, messages, extra
+
+
+class HumanGatewayToolsExecutor(GatewayToolsExecutor):
+    runtime_cls = HumanGatewayRuntime
 
 
 def setup(runtime, zones):
@@ -463,25 +518,92 @@ runtime = FunctionsRuntime(suite.tools)
 env = suite.load_and_inject_default_environment({})
 token = setup(runtime, {"get_balance": Zone.FILESYSTEM_RO, "send_money": Zone.NETWORK_WRITE})
 
-calls = [FunctionCall(function="get_balance", args={}, id="1"),
-         FunctionCall(function="send_money", id="2",
-                      args={"recipient": "US133000000121212121212", "amount": 10.0,
-                            "subject": "test", "date": "2022-01-01"})]
+
+def pay(recipient):
+    return FunctionCall(function="send_money", id=recipient,
+                        args={"recipient": recipient, "amount": 10.0,
+                              "subject": "test", "date": "2022-01-01"})
+
+
+calls = [FunctionCall(function="get_balance", args={}, id="0"),
+         pay("US133000000121212121212"), pay("XX000ATTACKER")]
 messages = [{"role": "assistant", "content": None, "tool_calls": calls}]
+
+# 1. No approver: the pause goes back to the model as a tool error.
 _, _, _, out, _ = GatewayToolsExecutor(token).query("", runtime, env, messages)
 for m in out[1:]:
-    print(m["tool_call"].function, "->", m["error"] or m["content"][0]["content"])
+    print("plain:", m["tool_call"].function, "->", m["error"] or m["content"][0]["content"])
+
+# 2. With an approver policy: pay known payees only.
+KNOWN = {"US133000000121212121212"}
+HumanGatewayRuntime.approver = staticmethod(
+    lambda req: json.loads(req.raw_params or "{}").get("recipient") in KNOWN)
+_, _, _, out, _ = HumanGatewayToolsExecutor(token).query("", runtime, env, messages)
+for m in out[2:]:
+    print("human:", m["tool_call"].args["recipient"], "->", m["error"] or m["content"][0]["content"])
 ```
 
-Output:
+Output (stdout; request ids vary):
 
 ```text
-get_balance -> 1810.0
-send_money -> Paused for human approval (zone 'network_write' requires approval); request abce0357-285e-4173-8519-55589ca02388
+plain: get_balance -> 1810.0
+plain: send_money -> Paused for human approval (zone 'network_write' requires approval); request b3538d60-0573-418d-9738-7e0476e5d3fe
+plain: send_money -> Paused for human approval (zone 'network_write' requires approval); request f03f4ab9-2f22-4b97-81a1-e6b3c25b2971
+human: US133000000121212121212 -> {'message': 'Transaction to US133000000121212121212 for 10.0 sent.'}
+human: XX000ATTACKER -> Denied by human approver (request f03f4ab9-2f22-4b97-81a1-e6b3c25b2971)
 ```
 
-In a pipeline: `ToolsExecutionLoop([GatewayToolsExecutor(token), llm])`
-where the stock examples use `ToolsExecutor()`.
+In a pipeline: `ToolsExecutionLoop([HumanGatewayToolsExecutor(token), llm])`
+(or `GatewayToolsExecutor` for "nobody approves") where the stock examples
+use `ToolsExecutor()`.
+
+#### Running it against a local model (Ollama)
+
+Any OpenAI-compatible endpoint works, including a local Ollama server.
+Four things tripped up a first run on a CPU-only machine:
+
+1. **`developer` role.** agentdojo 0.1.35 sends the system prompt with
+   role `developer`; Ollama's OpenAI endpoint rejects it. Map it to
+   `system`.
+2. **Pipeline name.** Attacks such as `important_instructions` address
+   the model by name and look it up from `pipeline.name`. The name must
+   contain a key from agentdojo's `MODEL_NAMES` (for a local model:
+   `"local"`), otherwise the attack raises `ValueError` when it runs.
+3. **Context length.** Ollama's OpenAI endpoint ignores `num_ctx` in the
+   request. Set the context window on the server
+   (`OLLAMA_CONTEXT_LENGTH=8192`, or `PARAMETER num_ctx 8192` in a
+   Modelfile); the default is too small for AgentDojo's tool schemas.
+4. **Runaway generations.** A small model on CPU can loop. Cap
+   `max_tokens` and set a client timeout with no retries.
+
+```python
+# not run by the doc test: needs a running Ollama server
+import openai
+from agentdojo.agent_pipeline import (AgentPipeline, InitQuery, OpenAILLM, SystemMessage,
+                                      ToolsExecutionLoop)
+from agentdojo.agent_pipeline.agent_pipeline import load_system_message
+from agentdojo.agent_pipeline.llms import openai_llm
+
+_orig = openai_llm._message_to_openai
+
+
+def _to_openai(message, model_name):          # 1. developer → system
+    m = _orig(message, model_name)
+    return {**m, "role": "system"} if m.get("role") == "developer" else m
+
+
+openai_llm._message_to_openai = _to_openai
+
+client = openai.OpenAI(base_url="http://localhost:11434/v1", api_key="ollama",
+                       timeout=600, max_retries=0)          # 4. timeout, no retries
+_create = client.chat.completions.create
+client.chat.completions.create = lambda *a, **kw: _create(*a, **{"max_tokens": 512, **kw})
+llm = OpenAILLM(client, "qwen2.5:7b", temperature=0.0)
+
+pipeline = AgentPipeline([SystemMessage(load_system_message(None)), InitQuery(), llm,
+                          ToolsExecutionLoop([HumanGatewayToolsExecutor(token), llm])])
+pipeline.name = "local-qwen2.5:7b"                         # 2. must contain "local"
+```
 
 Things to decide and report in any evaluation:
 

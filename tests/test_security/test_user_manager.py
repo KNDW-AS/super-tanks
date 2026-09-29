@@ -592,3 +592,35 @@ class TestAudit:
         for i in range(5):
             user_db.create_user(name=f"U{i}", pin="1", level=2, created_by="system")
         assert len(user_db.get_user_audit(limit=3)) == 3
+
+
+class TestNoDefaultAdmin:
+    """No install may ship with a known credential (was: Admin / 0000)."""
+
+    def test_ensure_admin_creates_no_account(self, user_db):
+        assert user_db.ensure_admin_exists() is False
+        assert user_db.list_users() == []
+        for pin in ("0000", "1234", "000000", "123456"):
+            assert user_db.authenticate("admin", pin) is None
+
+    def test_ensure_admin_true_when_present(self, seed_admin):
+        assert seed_admin.ensure_admin_exists() is True
+
+    @pytest.mark.parametrize("pin", ["0000", "1234", "12345", "123456", "999999", ""])
+    def test_first_admin_rejects_trivial_pin(self, user_db, pin):
+        assert user_db.create_first_admin("Boss", pin)["success"] is False
+        assert user_db.list_users() == []
+
+    def test_first_admin_with_chosen_pin(self, user_db):
+        assert user_db.create_first_admin("Boss", "k7-p4x9")["success"] is True
+        assert user_db.authenticate("boss", "k7-p4x9") is not None
+        assert user_db.create_first_admin("Other", "q8-z2m1")["success"] is False
+
+
+def test_cli_create_admin(user_db, monkeypatch, capsys):
+    from supertanks.__main__ import main
+    monkeypatch.setenv("SUPER_TANKS_ADMIN_PIN", "k7-p4x9")
+    assert main(["create-admin", "--name", "Boss"]) == 0
+    assert user_db.authenticate("boss", "k7-p4x9") is not None
+    monkeypatch.setenv("SUPER_TANKS_ADMIN_PIN", "0000")
+    assert main(["create-admin", "--name", "Other"]) == 1

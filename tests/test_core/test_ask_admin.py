@@ -418,3 +418,56 @@ def test_concurrent_first_use_on_fresh_db(tmp_path):
         t.join()
     assert errors == []
     assert len(ApprovalStore(db_path=path).list_pending(limit=100)) == 40
+
+
+class TestSingleUseStore:
+    def test_consume_once(self, store):
+        req = store.create_request("t", "u", "r", {"a": 1})
+        assert store.consume_approval(req.request_id) is False     # not approved yet
+        store.approve_request(req.request_id, "admin")
+        assert store.find_approved_request("t", "u", {"a": 1}) is not None
+        assert store.consume_approval(req.request_id) is True
+        assert store.consume_approval(req.request_id) is False
+        assert store.find_approved_request("t", "u", {"a": 1}) is None
+        assert store.get_request(req.request_id).consumed_at is not None
+        assert store.verify_event_chain() is None
+
+    def test_consume_respects_window(self, store):
+        req = store.create_request("t", "u", "r", {"a": 2})
+        store.approve_request(req.request_id, "admin")
+        assert store.consume_approval(req.request_id, max_age_seconds=-1) is False
+
+    def test_receipt_gone_after_consume(self, fresh_singleton):
+        req = fresh_singleton.create_request("t", "u", "r", {"a": 3})
+        fresh_singleton.approve_request(req.request_id, "admin")
+        assert get_approval_receipt(req.request_id) is not None
+        fresh_singleton.consume_approval(req.request_id)
+        assert get_approval_receipt(req.request_id) is None
+
+
+def test_time_remaining_zero_once_resolved(fresh_singleton):
+    denied = fresh_singleton.create_request("t", "u", "r", {"d": 1})
+    fresh_singleton.deny_request(denied.request_id, "admin")
+    approved = fresh_singleton.create_request("t", "u", "r", {"d": 2})
+    fresh_singleton.approve_request(approved.request_id, "admin")
+    pending = fresh_singleton.create_request("t", "u", "r", {"d": 3})
+    assert get_request_status(denied.request_id)["time_remaining"] == 0
+    assert get_request_status(approved.request_id)["time_remaining"] == 0
+    assert get_request_status(pending.request_id)["time_remaining"] > 0
+
+
+def test_consumed_at_column_migrated(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE approval_requests (
+        request_id TEXT PRIMARY KEY, tool_name TEXT NOT NULL, user_id TEXT NOT NULL,
+        reason TEXT, args_hash TEXT NOT NULL, args_len INTEGER NOT NULL,
+        status TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL,
+        resolved_at REAL, resolved_by TEXT, raw_params TEXT DEFAULT '{}')""")
+    conn.commit()
+    conn.close()
+    store = ApprovalStore(db_path=str(path))
+    req = store.create_request("t", "u", "r", {})
+    store.approve_request(req.request_id, "a")
+    assert store.consume_approval(req.request_id) is True

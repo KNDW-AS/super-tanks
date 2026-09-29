@@ -239,6 +239,16 @@ class TestNotifyWilliam:
                                 matched_patterns=["x: y"])
         f._notify_william("telegram:user", result)  # must not raise
 
+    def test_missing_notifier_is_quiet(self, monkeypatch, caplog):
+        from core.security import zef_injection_filter as f
+        monkeypatch.delenv("AERIS_GOGATE_TELEGRAM_TOKEN", raising=False)
+        result = f.FilterResult(verdict=f.FilterVerdict.BLOCK,
+                                message="test", matched_patterns=["x: y"])
+        with caplog.at_level("INFO"):
+            f._notify_william("telegram:user", result)
+        assert not [r for r in caplog.records if r.levelno >= 20]
+        assert "AERIS" not in caplog.text
+
 
 # ── Unicode bypass resistance ──────────────────────────────────────────────
 
