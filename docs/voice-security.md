@@ -156,9 +156,10 @@ Every event written by `handle_transcript()` carries:
 | `spoken_on` | `media_player.*` entity that played the audio, or None |
 | `voice_id` | which profile spoke (incl. `#N` suffix for multi-speaker disambiguation) |
 
-The correlation_id threads through Aeris's brain audit, the GO-Gate
-queue, and the dispatch log, so post-incident review can trace a
-spoken word all the way to whatever it did or didn't do.
+This voice correlation_id is separate from the gateway's: every
+`dispatch_tool` call mints its own per-dispatch id in the dispatch log,
+so joining a spoken command to the tool calls it caused is done by
+agent and timestamp, not by a shared id.
 
 ## Voice identity vs voice distinguishability
 

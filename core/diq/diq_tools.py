@@ -1,6 +1,6 @@
 """
 DIQ Tool Contract — DO NOT MODIFY
-Version: 1.1
+Version: 1.2
 
 All tools must implement this interface to register with the gateway.
 The gateway calls ONLY these methods. Tools implement them.
@@ -12,13 +12,22 @@ the gateway. Subclasses implement `_execute_impl()` instead. The
 previous design left `execute()` abstract — any code holding a tool
 instance could call `.execute(request)` directly and bypass the
 gateway's role + allowlist + audit checks entirely.
+
+v1.2: two optional, non-abstract hooks with safe defaults, so existing
+tools keep working unchanged:
+  - allowed_agents(): [] means all agents (same rule as
+    DIQSkill.allowed_agents). Enforced by the gateway (layer 10).
+  - mcp_server(): None for in-process tools; an MCP server name makes
+    the gateway apply MCP server trust (layer 9).
+Existing deployments must re-seal after upgrading
+(`python -m supertanks seal`).
 """
 
 import contextvars
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 _logger = logging.getLogger("diq.contract")
 
@@ -135,6 +144,23 @@ class DIQTool(ABC):
                 ),
             )
         return await self._execute_impl(request)
+
+    def allowed_agents(self) -> List[str]:
+        """Agents that may invoke this tool. [] means all.
+
+        Enforced by core.gateway (layer 10) for every caller, including
+        system and internal. Must return a list/tuple/set of str;
+        anything else makes the gateway deny (fail closed).
+        """
+        return []
+
+    def mcp_server(self) -> Optional[str]:
+        """Name of the MCP server backing this tool, or None.
+
+        When not None, core.gateway checks the server's trust level
+        (core.security.mcp_security, layer 9) before execution.
+        """
+        return None
 
     def validate_access(self, request: ToolRequest) -> bool:
         """

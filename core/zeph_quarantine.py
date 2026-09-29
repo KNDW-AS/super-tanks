@@ -436,7 +436,7 @@ class QuarantineWatcher(FileSystemEventHandler):
             _token = os.environ.get("AERIS_GOGATE_TELEGRAM_TOKEN")
             _chat_id = os.environ.get("AERIS_ADMIN_CHAT_ID", os.getenv("AERIS_ADMIN_CHAT_ID", "0"))
             if not _token:
-                self.logger.warning("[SANDBOX_ALERT] No AERIS_GOGATE_TELEGRAM_TOKEN — alert skipped")
+                self.logger.debug("[SANDBOX_ALERT] no admin notifier configured; alert logged only")
                 return
 
             violations = scan_result.violations or []

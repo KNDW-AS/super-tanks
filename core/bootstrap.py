@@ -76,12 +76,15 @@ def _step_load_mode(result: BootResult) -> None:
 
 
 def _step_ensure_admin(result: BootResult) -> None:
-    """Guarantee at least one Level 5 user exists. Without this, the
-    user_manager has no actor authorised to call update_user/delete_user."""
+    """Check that a Level-5 user exists. Never creates one: the first
+    admin is created explicitly (`python -m supertanks create-admin`),
+    so no install ships with a known credential. A missing admin is
+    logged, not fatal — the gateway does not depend on user accounts."""
     from core.security.user_manager import ensure_admin_exists
-    ensure_admin_exists()
+    present = ensure_admin_exists()
     result.steps_completed.append("ensure_admin_exists")
-    logger.info("[BOOT] Admin user verified")
+    if present is not False:   # user_manager already logged the how-to otherwise
+        logger.info("[BOOT] Admin user verified")
 
 
 def _step_ensure_tripwires(result: BootResult) -> None:
@@ -158,6 +161,14 @@ def _step_register_tools(result: BootResult) -> None:
         from core.diq.diq_registry import bootstrap as registry_bootstrap
         registry_bootstrap()
         logger.info("[BOOT] DIQ registry populated")
+    except ModuleNotFoundError as e:
+        if (e.name or "").split(".")[0] != "tools":
+            logger.warning("[BOOT] DIQ registry not bootstrapped: %s", e)
+            result.errors.append(f"registry: {e}")
+        else:
+            # Expected in the open-source edition: tools/ is not shipped.
+            logger.info("[BOOT] no tools/ package (open-source edition) — "
+                        "register your own tools with diq_registry.register_tool()")
     except ImportError as e:
         logger.warning("[BOOT] DIQ registry not bootstrapped (tools/ missing?): %s", e)
         result.errors.append(f"registry: {e}")

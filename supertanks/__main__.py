@@ -5,6 +5,7 @@ Commands
   demo     run the GO-Gate console demo (no dependencies, no network)
   seal     write core/diq/DIQ_CHECKSUMS.json so core.bootstrap.boot() can run
   boot     run the 8-step boot sequence and print the report
+  create-admin  create the first Level-5 user with a PIN you choose (no default account exists)
   test     run the unit tests (pytest -q --no-cov)
 
 What is NOT in this repository: the agent main loop (`main_loop.py`) and the
@@ -90,6 +91,23 @@ def cmd_boot(args) -> int:
     return 0
 
 
+def cmd_create_admin(args) -> int:
+    import getpass
+    from core.security.user_manager import create_first_admin
+    pin = os.environ.get("SUPER_TANKS_ADMIN_PIN")
+    if not pin:
+        pin = getpass.getpass("New admin PIN (min 6 characters): ")
+        if pin != getpass.getpass("Repeat PIN: "):
+            _line(BAD, "PINs do not match")
+            return 1
+    res = create_first_admin(args.name, pin)
+    if not res.get("success"):
+        _line(BAD, res.get("error", "failed"))
+        return 1
+    _line(OK, f"Level-5 user '{res['user_id']}' created")
+    return 0
+
+
 def cmd_test(_args) -> int:
     return subprocess.call([sys.executable, "-m", "pytest", "-q", "--no-cov", "-p", "no:cacheprovider"], cwd=str(ROOT))
 
@@ -101,6 +119,9 @@ def main(argv=None) -> int:
     sub.add_parser("demo", help="GO-Gate console demo").set_defaults(f=cmd_demo)
     sub.add_parser("seal", help="write DIQ_CHECKSUMS.json").set_defaults(f=cmd_seal)
     b = sub.add_parser("boot", help="run the boot sequence"); b.add_argument("--force", action="store_true"); b.set_defaults(f=cmd_boot)
+    c = sub.add_parser("create-admin", help="create the first Level-5 user (PIN from prompt or SUPER_TANKS_ADMIN_PIN)")
+    c.add_argument("--name", default="Admin")
+    c.set_defaults(f=cmd_create_admin)
     sub.add_parser("test", help="run the unit tests").set_defaults(f=cmd_test)
     a = ap.parse_args(argv)
     os.chdir(ROOT)

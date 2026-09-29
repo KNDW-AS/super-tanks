@@ -51,8 +51,8 @@ AGENT_ALLOWLISTS: dict[str, List[str]] = {
         "trace_reflect",    # Analyze tool-call history
         # Phase 4: Skill gap closure — READ tools for Aeris
         "password",         # Generate passwords (stateless)
-        "pet_camera",       # Pet/camera status (read-only)
-        "yale",             # Yale lock status (read-only)
+        "pet_camera",       # Camera status + feeding log (reference impl drives no hardware)
+        "yale",             # Lock status/history in the reference impl; zone smarthouse → GO-Gate
         "system_monitor",   # System metrics (read-only)
         "status",           # Quick system status (read-only)
         "memory_skill",     # RAG query (read-only)
@@ -103,8 +103,8 @@ AGENT_ALLOWLISTS: dict[str, List[str]] = {
         "image_generate",   # Generate images via Gemini
         # Phase 4: Skill gap closure — all READ tools + WRITE tools for Zeph
         "password",         # Generate passwords
-        "pet_camera",       # Pet/camera status
-        "yale",             # Yale lock status
+        "pet_camera",       # Camera status + feeding log
+        "yale",             # Lock tool; zone smarthouse → every call needs GO-Gate
         "system_monitor",   # System metrics
         "status",           # Quick system status
         "memory_skill",     # RAG query

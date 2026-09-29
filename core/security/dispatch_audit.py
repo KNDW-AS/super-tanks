@@ -13,16 +13,16 @@ This module:
   1. Generates a `correlation_id` (UUID) for every dispatch.
   2. Records the dispatch in `data/dispatch_audit.db` (WAL, indexed)
      with: timestamp, correlation_id, agent_id, tool_name,
-     agent_role, verdict (allowed / denied_role / denied_allowlist /
-     denied_identity / denied_subsystem), result_success, error.
-  3. Exposes a ContextVar `current_correlation_id` so downstream
-     callers (memory_audit.log_access, trust_score.record_event,
-     approval store) can read it and include it in their own rows.
+     agent_role, verdict (see record_dispatch for the full list),
+     result_success, error.
+  3. Exposes a ContextVar `current_correlation_id` for the duration of
+     the dispatch. The only other writer that reads it today is
+     `core.memory.audit_log.log_access`, which stores it on memory
+     rows. Trust events and approval requests do not record it.
 
-The correlation_id is the join key for incident reconstruction.
-`grep <id>` across memory_audit.db, trust_score.db,
-approval_requests.db, and this DB returns the full story of one
-agent action — what, who, when, did-it-work, what side effects.
+The correlation_id joins this DB with memory_access_log for incident
+reconstruction: `grep <id>` across the two returns the dispatch and
+the memory reads/writes it caused.
 
 Append-only by convention. The follow-up to make the rows
 tamper-evident (chained HMAC) is tracked as R-12 in the risk
@@ -137,10 +137,25 @@ def record_dispatch(
       "denied_identity"   — HMAC token verification failed
       "denied_role"       — DIQ role check failed
       "denied_allowlist"  — per-agent allowlist rejected the call
-      "denied_subsystem"  — allowlist or another subsystem raised;
+      "denied_agent"      — tool's allowed_agents() excludes the agent (L10)
+      "denied_zone"       — zone policy DENY, or a human denied the
+                            GO-Gate request for this exact call (L8)
+      "pending_approval"  — paused in GO-Gate; not executed (L8/L9)
+      "denied_mcp"        — MCP server quarantined/unknown/denied (L9)
+      "denied_circuit_breaker" — agent over its rate budget (L7)
+      "denied_subsystem"  — a check raised or its store is unavailable;
                             fail-closed deny
+      "tool_error"        — the tool raised or returned a non-ToolResponse
+      "no_wrapper"        — tool not registered; caller falls back
+    Note: this function logs and swallows its own write errors — a
+    failed audit write does not fail the dispatch (fail-open for audit).
     """
     now = datetime.now(timezone.utc).isoformat()
+    # The columns are NOT NULL: a caller passing agent_id=None (e.g. an
+    # unauthenticated probe) must still leave a row, so coerce here.
+    agent_id = "<none>" if agent_id is None else str(agent_id)
+    tool_name = "<none>" if tool_name is None else str(tool_name)
+    agent_role = "<none>" if agent_role is None else str(agent_role)
     row = {
         "timestamp": now,
         "correlation_id": correlation_id,

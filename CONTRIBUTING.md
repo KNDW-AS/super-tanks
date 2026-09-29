@@ -12,7 +12,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pytest --no-cov -q
 ```
 
-A passing run is currently 1361 tests in ~50s on commodity Linux.
+A passing run has zero failures; the whole suite takes a minute or two on a laptop.
 
 ## Two ways to land code
 

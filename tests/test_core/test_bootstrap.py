@@ -231,3 +231,15 @@ class TestIdempotency:
     def test_get_boot_result_returns_last(self, boot_env):
         result = boot_env.boot_mod.boot()
         assert boot_env.boot_mod.get_boot_result() is result
+
+
+def test_absent_tools_package_is_not_an_error(boot_env, monkeypatch):
+    fake_reg = sys.modules["core.diq.diq_registry"]
+
+    def _raise():
+        raise ModuleNotFoundError("No module named 'tools'", name="tools")
+    monkeypatch.setattr(fake_reg, "bootstrap", _raise)
+    from core.bootstrap import boot
+    result = boot(force=True)
+    assert "register_tools" in result.steps_completed
+    assert not any("registry" in e for e in result.errors)

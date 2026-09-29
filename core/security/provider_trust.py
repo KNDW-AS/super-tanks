@@ -264,10 +264,19 @@ _PII_PATTERNS = [
     (r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "[IP]"),
 ]
 
+# Known token formats first (more specific), then the generic
+# `key = value` form. Applied case-insensitively. Anything that matches
+# none of these (an arbitrary opaque string with no label) is NOT
+# stripped — see README "Provider Trust Tier".
 _SECRET_PATTERNS = [
+    (r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", "[REDACTED_SECRET]"),
     (r"(?:api[_-]?key|token|secret|password|bearer)\s*[:=]\s*\S+", "[REDACTED_SECRET]"),
     (r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", "[JWT]"),
-    (r"sk-[a-zA-Z0-9]{20,}", "[API_KEY]"),
+    (r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}", "[API_KEY]"),       # OpenAI / Anthropic style
+    (r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}", "[GITHUB_TOKEN]"),
+    (r"\bgithub_pat_[A-Za-z0-9_]{20,}", "[GITHUB_TOKEN]"),
+    (r"\bxox[abposr]-[A-Za-z0-9-]{10,}", "[SLACK_TOKEN]"),
+    (r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", "[AWS_KEY_ID]"),
     (r"AIza[A-Za-z0-9_-]{35}", "[GOOGLE_KEY]"),
 ]
 
@@ -277,7 +286,9 @@ def strip_context_for_tier(text: str, tier: int) -> str:
     Strip sensitive content from text before it goes to a provider of ``tier``.
 
     TIER_1: nothing
-    TIER_2: API keys, tokens, passwords, JWTs
+    TIER_2: labelled secrets (key=/token:/password=…), Bearer tokens, JWTs
+            and known key formats (sk-/sk-ant-, ghp_/gho_/github_pat_,
+            xox?-, AKIA/ASIA, AIza)
     TIER_3: + PII patterns and configured ``pii_terms``
     TIER_4: + smart-home entity ids and filesystem paths
     """

@@ -29,10 +29,11 @@ provider_tiers:
 pii_terms: []
 
 # Layer 12: ordered fallback chains per agent. Moving to a LOWER tier than the
-# current provider requires a GO-Gate approval; a denied or timed-out approval
-# queues the message instead of sending it. Same or higher tier is automatic.
+# current provider requires a GO-Gate approval; on a denied or timed-out approval
+# the message is not sent to that provider (the caller gets an error; there is no
+# queue or retry in this repository). Same or higher tier is automatic.
 fallback_chains:
   default: ["anthropic", "google", "ollama"]
 
-# Seconds to wait for a GO-Gate decision on a tier downgrade before queuing.
+# Seconds to wait for a GO-Gate decision on a tier downgrade before refusing it.
 downgrade_approval_timeout_s: 300
